@@ -1,4 +1,6 @@
-# Tab Anti Warping +
+# NOTICE: I'm going to get around to this. Hopefully. I haven't actually done anything to it yet. So you might as well just use the original.
+
+## Tab Anti Warping +
 Add element as rounded Tab to limit warping effect in print corner. This plugin is an improved version of my first plugin : [TabAntiWarping](https://github.com/5axes/TabAntiWarping).
 
 
