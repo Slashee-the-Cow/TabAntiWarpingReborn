@@ -15,15 +15,10 @@
 # V1.0.5 11-07-2022    : Change Style of Button for Cura 5.0 5.1
 # V1.1.0 18-01-2023    : Integrate translation + French translation
 #------------------------------------------------------------------------------------------------------------------
+# Reborn version by Slashee the Cow 2025-
 
-VERSION_QT5 = False
-try:
-    from PyQt6.QtCore import Qt, QTimer, pyqtProperty, pyqtSignal, pyqtSlot, QUrl
-    from PyQt6.QtWidgets import QApplication
-except ImportError:
-    from PyQt5.QtCore import Qt, QTimer, pyqtProperty, pyqtSignal, pyqtSlot, QUrl
-    from PyQt5.QtWidgets import QApplication
-    VERSION_QT5 = True
+from PyQt6.QtCore import Qt, QTimer, pyqtProperty, pyqtSignal, pyqtSlot, QUrl
+from PyQt6.QtWidgets import QApplication
 
 from typing import Optional, List
 
@@ -100,10 +95,7 @@ class TabPlus(Tool):
 
 
         # Shortcut
-        if not VERSION_QT5:
-            self._shortcut_key = Qt.Key.Key_J
-        else:
-            self._shortcut_key = Qt.Key_J
+        self._shortcut_key = Qt.Key_J
             
         self._controller = self.getController()
 
@@ -117,23 +109,8 @@ class TabPlus(Tool):
         Resources.addSearchPath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources"))        
 
         
-        self.Major=1
-        self.Minor=0
-
         # Logger.log('d', "Info Version CuraVersion --> " + str(Version(CuraVersion)))
         Logger.log('d', "Info CuraVersion --> " + str(CuraVersion))
-        
-        # Test version for Cura Master
-        # https://github.com/smartavionics/Cura
-        if "master" in CuraVersion :
-            self.Major=4
-            self.Minor=20
-        else:
-            try:
-                self.Major = int(CuraVersion.split(".")[0])
-                self.Minor = int(CuraVersion.split(".")[1])
-            except:
-                pass
         
         self.setExposedProperties("SSize", "SOffset", "SCapsule", "NLayer", "SMsg" ,"SArea" )
         
@@ -178,10 +155,7 @@ class TabPlus(Tool):
     def event(self, event):
         super().event(event)
         modifiers = QApplication.keyboardModifiers()
-        if not VERSION_QT5:
-            ctrl_is_active = modifiers & Qt.KeyboardModifier.ControlModifier
-        else:
-            ctrl_is_active = modifiers & Qt.ControlModifier
+        ctrl_is_active = modifiers & Qt.ControlModifier
 
         if event.type == Event.MousePressEvent and MouseEvent.LeftButton in event.buttons and self._controller.getToolsEnabled():
             if ctrl_is_active:
@@ -690,7 +664,7 @@ class TabPlus(Tool):
             i_value = int(NLayer)
             
         except ValueError:
-            return
+            return  
  
         if i_value < 1:
             return
