@@ -22,9 +22,8 @@ Item
     id: base
     width: childrenRect.width
     height: childrenRect.height
-    UM.I18nCatalog { id: catalog; name: "tabplus"}
+    UM.I18nCatalog { id: catalog; name: "tabawreborn"}
 	
-	property string getlinkCurrent: "https://github.com/5axes/TabPlus/wiki"
 	property int localwidth:70
 
 
@@ -138,7 +137,7 @@ Item
 			onClicked: UM.ActiveTool.setProperty("SCapsule", checked)
 		}
 
-		UM.SimpleButton
+		/*UM.SimpleButton
 		{
 			id: helpButton
 			width: UM.Theme.getSize("save_button_specs_icons").width
@@ -151,7 +150,7 @@ Item
 			{
 			Qt.openUrlExternally(getlinkCurrent)
 			}
-		}
+		}*/
 	}
 
 	Rectangle {

@@ -60,21 +60,33 @@ import numpy
 from UM.Resources import Resources
 from UM.i18n import i18nCatalog
 
-i18n_cura_catalog = i18nCatalog("cura")
-i18n_catalog = i18nCatalog("fdmprinter.def.json")
-i18n_extrud_catalog = i18nCatalog("fdmextruder.def.json")
+fdmprinter_i18n = i18nCatalog("fdmprinter.def.json")
 
 Resources.addSearchPath(
     os.path.join(os.path.abspath(os.path.dirname(__file__)))
 )  # Plugin translation file import
 
-catalog = i18nCatalog("tabplus")
+catalog = i18nCatalog("tabawreborn")
 
 if catalog.hasTranslationLoaded():
-    Logger.log("i", "Tab Plus Plugin translation loaded!")
+    Logger.log("i", "Tab Anti Warping Reborn plugin translation loaded")
     
+DEBUG_MODE = True
+
+def log(level, message):
+    """Wrapper function for logging messages using Cura's Logger, but with debug mode so as not to spam you."""
+    if level == "d" and DEBUG_MODE:
+        Logger.log("d", message)
+    elif level == "i":
+        Logger.log("i", message)
+    elif level == "w":
+        Logger.log("w", message)
+    elif level == "e":
+        Logger.log("e", message)
+    elif DEBUG_MODE:
+        Logger.log("w", f"Invalid log level: {level} for message {message}")
     
-class TabPlus(Tool):
+class TabAnitWarpingReborn(Tool):
     def __init__(self):
         super().__init__()
         
@@ -83,11 +95,11 @@ class TabPlus(Tool):
         
         
         # variable for menu dialog        
-        self._UseSize = 0.0
-        self._UseOffset = 0.0
-        self._AsCapsule = False
-        self._AdhesionArea = False
-        self._Nb_Layer = 1
+        self._tab_size = 0.0
+        self._xy_offset = 0.0
+        self._dish = False
+        self._adhesion_area = False
+        self._layer_count = 1
         self._SMsg = catalog.i18nc("@message", "Remove All") 
         self._Mesg1 = False
         self._Mesg2 = False
@@ -110,9 +122,9 @@ class TabPlus(Tool):
 
         
         # Logger.log('d', "Info Version CuraVersion --> " + str(Version(CuraVersion)))
-        Logger.log('d', "Info CuraVersion --> " + str(CuraVersion))
+        #log('d', "Info CuraVersion --> " + str(CuraVersion))
         
-        self.setExposedProperties("SSize", "SOffset", "SCapsule", "NLayer", "SMsg" ,"SArea" )
+        self.setExposedProperties("SSize", "SOffset", "SCapsule", "LayerCount", "SMsg" ,"SArea" )
         
         CuraApplication.getInstance().globalContainerStackChanged.connect(self._updateEnabled)
         
@@ -132,26 +144,19 @@ class TabPlus(Tool):
         
         # set the preferences to store the default value
         self._preferences = CuraApplication.getInstance().getPreferences()
-        self._preferences.addPreference("tab_plus/p_size", 10)
-        # convert as float to avoid further issue
-        self._UseSize = float(self._preferences.getValue("tab_plus/p_size"))
- 
-        self._preferences.addPreference("tab_plus/p_offset", 0.16)
-        # convert as float to avoid further issue
-        self._UseOffset = float(self._preferences.getValue("tab_plus/p_offset"))
+        self._preferences.addPreference("tabawreborn/tab_size", 10)
+        self._preferences.addPreference("tabawreborn/xy_offset", 0.16)
+        self._preferences.addPreference("tabawreborn/create_dish", False)
+        self._preferences.addPreference("tabawreborn/adhesion_area", False)
+        self._preferences.addPreference("tabawreborn/layer_count", 1)
+        
+        self._tab_size = float(self._preferences.getValue("tabawreborn/tab_size"))
+        self._xy_offset = float(self._preferences.getValue("tabawreborn/xy_offset"))
+        self._dish = bool(self._preferences.getValue("tabawreborn/create_dish")) 
+        self._adhesion_area = bool(self._preferences.getValue("tabawreborn/adhesion_area"))
+        self._layer_count = int(self._preferences.getValue("tabawreborn/layer_count"))
 
-        self._preferences.addPreference("tab_plus/as_capsule", False)
-        # convert as float to avoid further issue
-        self._AsCapsule = bool(self._preferences.getValue("tab_plus/as_capsule")) 
 
-        self._preferences.addPreference("tab_plus/adhesion_area", False)
-        self._AdhesionArea = bool(self._preferences.getValue("tab_plus/adhesion_area"))   
-
-        self._preferences.addPreference("tab_plus/nb_layer", 1)
-        # convert as float to avoid further issue
-        self._Nb_Layer = int(self._preferences.getValue("tab_plus/nb_layer"))       
-     
-                
     def event(self, event):
         super().event(event)
         modifiers = QApplication.keyboardModifiers()
@@ -196,13 +201,7 @@ class TabPlus(Tool):
 
             picked_position = picking_pass.getPickedPosition(event.x, event.y)
 
-            Logger.log('d', "X : {}".format(picked_position.x))
-            Logger.log('d', "Y : {}".format(picked_position.y))
-                            
-            # Add the support_mesh cube at the picked location
-            self._op = GroupedOperation()
-            self._createSupportMesh(picked_node, picked_position)
-            self._op.push() 
+            log("d", f"picked_position = X{picked_position.x} Y{picked_position.y}")
 
     def _createSupportMesh(self, parent: CuraSceneNode, position: Vector):
         node = CuraSceneNode()
@@ -212,32 +211,37 @@ class TabPlus(Tool):
         node.setSelectable(True)
         
         # long=Support Height
-        _long=position.y
-
-        # get layer_height_0 used to define pastille height
-        _id_ex=0
+        tab_height=position.y
         
         # This function can be triggered in the middle of a machine change, so do not proceed if the machine change
         # has not done yet.
         global_container_stack = CuraApplication.getInstance().getGlobalContainerStack()
         #extruder = global_container_stack.extruderList[int(_id_ex)] 
         extruder_stack = CuraApplication.getInstance().getExtruderManager().getActiveExtruderStacks()[0]     
-        self._Extruder_count=global_container_stack.getProperty("machine_extruder_count", "value") 
-        #Logger.log('d', "Info Extruder_count --> " + str(self._Extruder_count))   
+        extruder_count=global_container_stack.getProperty("machine_extruder_count", "value") 
+        #Logger.log('d', "Info Extruder_count --> " + str(extruder_count))   
         
-        _layer_h_i = extruder_stack.getProperty("layer_height_0", "value")
-        _layer_height = extruder_stack.getProperty("layer_height", "value")
-        _line_w = extruder_stack.getProperty("line_width", "value")
-        # Logger.log('d', 'layer_height_0 : ' + str(_layer_h_i))
-        _layer_h = (_layer_h_i * 1.2) + (_layer_height * (self._Nb_Layer -1) )
-        _line_w = _line_w * 1.2 
+        # Reasonable defaults for the "standard" 0.4mm nozzle
+        layer_height_0: float = 0.3
+        layer_height: float = 0.2
+        line_width: float = 0.4
         
-        if self._AsCapsule:
+        try:
+            layer_height_0 = float(extruder_stack.getProperty("layer_height_0", "value"))
+            layer_height = float(extruder_stack.getProperty("layer_height", "value"))
+            line_width = float(extruder_stack.getProperty("line_width", "value"))
+        except ValueError as e:
+            log("e", f"Error encountered getting properties from the extruder_stack: {e}")
+        
+        tab_layer_height = (layer_height_0 * 1.2) + (layer_height * (self._layer_count -1))
+        tab_line_width = line_width * 1.2
+        
+        if self._dish:
              # Capsule creation Diameter , Increment angle 10°, length, layer_height_0*1.2 , line_width
-            mesh = self._createCapsule(self._UseSize,10,_long,_layer_h,_line_w)       
+            mesh = self._create_dish(self._tab_size, 10, tab_height, tab_layer_height, tab_line_width)
         else:
             # Cylinder creation Diameter , Increment angle 10°, length, layer_height_0*1.2
-            mesh = self._createPastille(self._UseSize,10,_long,_layer_h)
+            mesh = self._createCylinder(self._tab_size, 10, tab_height, tab_layer_height)
         
         
         node.setMeshData(mesh.build())
@@ -263,15 +267,15 @@ class TabPlus(Tool):
         settings.addInstance(new_instance)
  
         # Define support_type
-        if self._AsCapsule:
+        if self._dish:
             key="support_type"
             s_p = global_container_stack.getProperty(key, "value")
             if s_p ==  'buildplate' and not self._Mesg1 :
                 definition_key=key + " label"
                 untranslated_label=extruder_stack.getProperty(key,"label")
-                translated_label=i18n_catalog.i18nc(definition_key, untranslated_label) 
+                translated_label=fdmprinter_i18n.i18nc(definition_key, untranslated_label)
                 Format_String = catalog.i18nc("@info:label", "Info modification current profile '") + translated_label  + catalog.i18nc("@info:label", "' parameter\nNew value : ") + catalog.i18nc("@info:label", "Everywhere")
-                Message(text = Format_String, title = catalog.i18nc("@info:title", "Warning ! Tab Anti Warping Plus")).show()
+                Message(text = Format_String, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti Warping Reborn - Setting Modification")).show()
                 Logger.log('d', 'support_type different : ' + str(s_p))
                 # Define support_type=everywhere
                 global_container_stack.setProperty(key, "value", 'everywhere')
@@ -280,60 +284,59 @@ class TabPlus(Tool):
         # Define support_xy_distance
         definition = stack.getSettingDefinition("support_xy_distance")
         new_instance = SettingInstance(definition, settings)
-        new_instance.setProperty("value", self._UseOffset)
+        new_instance.setProperty("value", self._xy_offset)
         # new_instance.resetState()  # Ensure that the state is not seen as a user state.
         settings.addInstance(new_instance)
 
         # Fix some settings in Cura to get a better result
-        id_ex=0
         global_container_stack = CuraApplication.getInstance().getGlobalContainerStack()
         extruder_stack = CuraApplication.getInstance().getExtruderManager().getActiveExtruderStacks()[0]
-        #extruder = global_container_stack.extruderList[int(id_ex)]    
+        #extruder = global_container_stack.extruderList[int(id_ex)]
         
         # Hop to fix it in a futur release
         # https://github.com/Ultimaker/Cura/issues/9882
         key="support_xy_distance"
         _xy_distance = extruder_stack.getProperty(key, "value")
-        if self._UseOffset !=  _xy_distance and not self._Mesg2 :
-            _msg = "New value : %8.3f" % (self._UseOffset)          
+        if self._xy_offset !=  _xy_distance and not self._Mesg2 :
+            _msg = "New value : %8.3f" % (self._xy_offset) 
             definition_key=key + " label"
             untranslated_label=extruder_stack.getProperty(key,"label")
-            translated_label=i18n_catalog.i18nc(definition_key, untranslated_label) 
+            translated_label=fdmprinter_i18n.i18nc(definition_key, untranslated_label) 
             Format_String = catalog.i18nc("@info:label", "Info modification current profile '") + "%s" + catalog.i18nc("@info:label", "' parameter\nNew value : ") + "%8.3f"
-            Message(text = Format_String % (translated_label, self._UseOffset), title = catalog.i18nc("@info:title", "Warning ! Tab Anti Warping Plus")).show()
+            Message(text = Format_String % (translated_label, self._xy_offset), title = catalog.i18nc("@info:setting_modification_title", "Tab Anti Warping Reborn - Setting Modification")).show()
             Logger.log('d', 'support_xy_distance different : ' + str(_xy_distance))
             # Define support_xy_distance
-            if self._Extruder_count > 1 :
-                global_container_stack.setProperty("support_xy_distance", "value", self._UseOffset)
+            if extruder_count > 1 :
+                global_container_stack.setProperty("support_xy_distance", "value", self._xy_offset)
             else:
-                extruder_stack.setProperty("support_xy_distance", "value", self._UseOffset)
+                extruder_stack.setProperty("support_xy_distance", "value", self._xy_offset)
             
             self._Mesg2 = True
  
-        if self._Nb_Layer >1 :
+        if self._layer_count >1 :
             key="support_infill_rate"
             s_p = int(extruder_stack.getProperty(key, "value"))
             Logger.log('d', 'support_infill_rate actual : ' + str(s_p))
             if s_p < 99 and not self._Mesg3 :
                 definition_key=key + " label"
                 untranslated_label=extruder_stack.getProperty(key,"label")
-                translated_label=i18n_catalog.i18nc(definition_key, untranslated_label)     
+                translated_label=fdmprinter_i18n.i18nc(definition_key, untranslated_label)     
                 Format_String = catalog.i18nc("@info:label", "Info modification current profile '") + translated_label + catalog.i18nc("@info:label", "' parameter\nNew value : ")+ catalog.i18nc("@info:label", "100%")                
-                Message(text = Format_String , title = catalog.i18nc("@info:title", "Warning ! Tab Anti Warping Plus")).show()
+                Message(text = Format_String , title = catalog.i18nc("@info:setting_modification_title", "Tab Anti Warping Reborn - Setting Modification")).show()
                 Logger.log('d', 'support_infill_rate different : ' + str(s_p))
                 # Define support_infill_rate=100%
-                if self._Extruder_count > 1 :
+                if extruder_count > 1 :
                     global_container_stack.setProperty("support_infill_rate", "value", 100)
                 else:
                     extruder_stack.setProperty("support_infill_rate", "value", 100)
                 
                 self._Mesg3 = True
         
-        #self._op = GroupedOperation()
+        scene_op = GroupedOperation()
         # First add node to the scene at the correct position/scale, before parenting, so the support mesh does not get scaled with the parent
-        self._op.addOperation(AddSceneNodeOperation(node, self._controller.getScene().getRoot()))
-        self._op.addOperation(SetParentOperation(node, parent))
-        #op.push()
+        scene_op.addOperation(AddSceneNodeOperation(node, self._controller.getScene().getRoot()))
+        scene_op.addOperation(SetParentOperation(node, parent))
+        scene_op.push()
         node.setPosition(position, CuraSceneNode.TransformSpace.World)
         self._all_picked_node.append(node)
         self._SMsg = catalog.i18nc("@message", "Remove Last") 
@@ -381,74 +384,75 @@ class TabPlus(Tool):
         self._had_selection = has_selection
  
     # Capsule creation
-    def _createCapsule(self, size, nb , lg, He, lw):
+    def _create_dish(self, base_diameter, segments , height, top_height, line_width):
+        """Create a "dish" style adhesion tab"""
         mesh = MeshBuilder()
         # Per-vertex normals require duplication of vertices
-        r = size / 2
+        base_radius = base_diameter / 2
         # First layer length
-        sup = -lg + He
-        if self._Nb_Layer >1 :
-            sup_c = -lg + (He * 2)
+        max_y = -height + top_height
+        if self._layer_count >1 :
+            cap_height = -height + (top_height * 2)
         else:
-            sup_c = -lg + (He * 3)
-        l = -lg
-        rng = int(360 / nb)
-        ang = math.radians(nb)
+            cap_height = -height + (top_height * 3)
+        min_y = -height
+        segment_angle = int(360 / segments)
+        segment_radians = math.radians(segments)
 
-        r_sup=math.tan(math.radians(45))*(He * 3)+r
+        cap_radius=math.tan(math.radians(45))*(top_height * 3)+base_radius
         # Top inside radius 
-        ri=r_sup-(1.8*lw)
+        inner_radius_cap=cap_radius-(1.8*line_width)
         # Top radius 
-        rit=r-(1.8*lw)
+        inner_radius_base=base_radius-(1.8*line_width)
             
-        verts = []
-        for i in range(0, rng):
+        vertices = []
+        for i in range(0, segment_angle):
             # Top
-            verts.append([ri*math.cos(i*ang), sup_c, ri*math.sin(i*ang)])
-            verts.append([r_sup*math.cos((i+1)*ang), sup_c, r_sup*math.sin((i+1)*ang)])
-            verts.append([r_sup*math.cos(i*ang), sup_c, r_sup*math.sin(i*ang)])
+            vertices.append([inner_radius_cap*math.cos(i*segment_radians), cap_height, inner_radius_cap*math.sin(i*segment_radians)])
+            vertices.append([cap_radius*math.cos((i+1)*segment_radians), cap_height, cap_radius*math.sin((i+1)*segment_radians)])
+            vertices.append([cap_radius*math.cos(i*segment_radians), cap_height, cap_radius*math.sin(i*segment_radians)])
             
-            verts.append([ri*math.cos((i+1)*ang), sup_c, ri*math.sin((i+1)*ang)])
-            verts.append([r_sup*math.cos((i+1)*ang), sup_c, r_sup*math.sin((i+1)*ang)])
-            verts.append([ri*math.cos(i*ang), sup_c, ri*math.sin(i*ang)])
+            vertices.append([inner_radius_cap*math.cos((i+1)*segment_radians), cap_height, inner_radius_cap*math.sin((i+1)*segment_radians)])
+            vertices.append([cap_radius*math.cos((i+1)*segment_radians), cap_height, cap_radius*math.sin((i+1)*segment_radians)])
+            vertices.append([inner_radius_cap*math.cos(i*segment_radians), cap_height, inner_radius_cap*math.sin(i*segment_radians)])
 
             #Side 1a
-            verts.append([r_sup*math.cos(i*ang), sup_c, r_sup*math.sin(i*ang)])
-            verts.append([r_sup*math.cos((i+1)*ang), sup_c, r_sup*math.sin((i+1)*ang)])
-            verts.append([r*math.cos((i+1)*ang), l, r*math.sin((i+1)*ang)])
+            vertices.append([cap_radius*math.cos(i*segment_radians), cap_height, cap_radius*math.sin(i*segment_radians)])
+            vertices.append([cap_radius*math.cos((i+1)*segment_radians), cap_height, cap_radius*math.sin((i+1)*segment_radians)])
+            vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])
             
             #Side 1b
-            verts.append([r*math.cos((i+1)*ang), l, r*math.sin((i+1)*ang)])
-            verts.append([r*math.cos(i*ang), l, r*math.sin(i*ang)])
-            verts.append([r_sup*math.cos(i*ang), sup_c, r_sup*math.sin(i*ang)])
+            vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])
+            vertices.append([base_radius*math.cos(i*segment_radians), min_y, base_radius*math.sin(i*segment_radians)])
+            vertices.append([cap_radius*math.cos(i*segment_radians), cap_height, cap_radius*math.sin(i*segment_radians)])
  
             #Side 2a
-            verts.append([rit*math.cos((i+1)*ang), sup, rit*math.sin((i+1)*ang)])
-            verts.append([ri*math.cos((i+1)*ang), sup_c, ri*math.sin((i+1)*ang)])
-            verts.append([ri*math.cos(i*ang), sup_c, ri*math.sin(i*ang)])
+            vertices.append([inner_radius_base*math.cos((i+1)*segment_radians), max_y, inner_radius_base*math.sin((i+1)*segment_radians)])
+            vertices.append([inner_radius_cap*math.cos((i+1)*segment_radians), cap_height, inner_radius_cap*math.sin((i+1)*segment_radians)])
+            vertices.append([inner_radius_cap*math.cos(i*segment_radians), cap_height, inner_radius_cap*math.sin(i*segment_radians)])
             
             #Side 2b
-            verts.append([ri*math.cos(i*ang), sup_c, ri*math.sin(i*ang)])
-            verts.append([rit*math.cos(i*ang), sup, rit*math.sin(i*ang)])
-            verts.append([rit*math.cos((i+1)*ang), sup, rit*math.sin((i+1)*ang)])
+            vertices.append([inner_radius_cap*math.cos(i*segment_radians), cap_height, inner_radius_cap*math.sin(i*segment_radians)])
+            vertices.append([inner_radius_base*math.cos(i*segment_radians), max_y, inner_radius_base*math.sin(i*segment_radians)])
+            vertices.append([inner_radius_base*math.cos((i+1)*segment_radians), max_y, inner_radius_base*math.sin((i+1)*segment_radians)])
                 
             #Bottom Top
-            verts.append([0, sup, 0])
-            verts.append([rit*math.cos((i+1)*ang), sup, rit*math.sin((i+1)*ang)])
-            verts.append([rit*math.cos(i*ang), sup, rit*math.sin(i*ang)])
+            vertices.append([0, max_y, 0])
+            vertices.append([inner_radius_base*math.cos((i+1)*segment_radians), max_y, inner_radius_base*math.sin((i+1)*segment_radians)])
+            vertices.append([inner_radius_base*math.cos(i*segment_radians), max_y, inner_radius_base*math.sin(i*segment_radians)])
             
             #Bottom 
-            verts.append([0, l, 0])
-            verts.append([r*math.cos(i*ang), l, r*math.sin(i*ang)])
-            verts.append([r*math.cos((i+1)*ang), l, r*math.sin((i+1)*ang)]) 
+            vertices.append([0, min_y, 0])
+            vertices.append([base_radius*math.cos(i*segment_radians), min_y, base_radius*math.sin(i*segment_radians)])
+            vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)]) 
             
             
-        mesh.setVertices(numpy.asarray(verts, dtype=numpy.float32))
+        mesh.setVertices(numpy.asarray(vertices, dtype=numpy.float32))
 
         indices = []
         # for every angle increment 24 Vertices
-        tot = rng * 24
-        for i in range(0, tot, 3): # 
+        total = segment_angle * 24
+        for i in range(0, total, 3): # 
             indices.append([i, i+1, i+2])
         mesh.setIndices(numpy.asarray(indices, dtype=numpy.int32))
 
@@ -456,41 +460,41 @@ class TabPlus(Tool):
         return mesh
         
     # Cylinder creation
-    def _createPastille(self, size, nb , lg, He):
+    def _createCylinder(self, base_diameter, segments, height, top_height):
         mesh = MeshBuilder()
         # Per-vertex normals require duplication of vertices
-        r = size / 2
+        base_radius = base_diameter / 2
         # First layer length
-        sup = -lg + He
-        l = -lg
-        rng = int(360 / nb)
-        ang = math.radians(nb)
+        max_y = -height + top_height
+        min_y = -height
+        segment_angle = int(360 / segments)
+        segment_radians = math.radians(segments)
         
-        verts = []
-        for i in range(0, rng):
+        vertices = []
+        for i in range(0, segment_angle):
             # Top
-            verts.append([0, sup, 0])
-            verts.append([r*math.cos((i+1)*ang), sup, r*math.sin((i+1)*ang)])
-            verts.append([r*math.cos(i*ang), sup, r*math.sin(i*ang)])
+            vertices.append([0, max_y, 0])
+            vertices.append([base_radius*math.cos((i+1)*segment_radians), max_y, base_radius*math.sin((i+1)*segment_radians)])
+            vertices.append([base_radius*math.cos(i*segment_radians), max_y, base_radius*math.sin(i*segment_radians)])
             #Side 1a
-            verts.append([r*math.cos(i*ang), sup, r*math.sin(i*ang)])
-            verts.append([r*math.cos((i+1)*ang), sup, r*math.sin((i+1)*ang)])
-            verts.append([r*math.cos((i+1)*ang), l, r*math.sin((i+1)*ang)])
+            vertices.append([base_radius*math.cos(i*segment_radians), max_y, base_radius*math.sin(i*segment_radians)])
+            vertices.append([base_radius*math.cos((i+1)*segment_radians), max_y, base_radius*math.sin((i+1)*segment_radians)])
+            vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])
             #Side 1b
-            verts.append([r*math.cos((i+1)*ang), l, r*math.sin((i+1)*ang)])
-            verts.append([r*math.cos(i*ang), l, r*math.sin(i*ang)])
-            verts.append([r*math.cos(i*ang), sup, r*math.sin(i*ang)])
+            vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])
+            vertices.append([base_radius*math.cos(i*segment_radians), min_y, base_radius*math.sin(i*segment_radians)])
+            vertices.append([base_radius*math.cos(i*segment_radians), max_y, base_radius*math.sin(i*segment_radians)])
             #Bottom 
-            verts.append([0, l, 0])
-            verts.append([r*math.cos(i*ang), l, r*math.sin(i*ang)])
-            verts.append([r*math.cos((i+1)*ang), l, r*math.sin((i+1)*ang)])          
+            vertices.append([0, min_y, 0])
+            vertices.append([base_radius*math.cos(i*segment_radians), min_y, base_radius*math.sin(i*segment_radians)])
+            vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])          
             
-        mesh.setVertices(numpy.asarray(verts, dtype=numpy.float32))
+        mesh.setVertices(numpy.asarray(vertices, dtype=numpy.float32))
 
         indices = []
         # for every angle increment 12 Vertices
-        tot = rng * 12
-        for i in range(0, tot, 3): # 
+        total = segment_angle * 12
+        for i in range(0, total, 3): # 
             indices.append([i, i+1, i+2])
         mesh.setIndices(numpy.asarray(indices, dtype=numpy.int32))
 
@@ -521,9 +525,9 @@ class TabPlus(Tool):
     # Source code from MeshTools Plugin 
     # Copyright (c) 2020 Aldo Hoeben / fieldOfView
     def _getAllSelectedNodes(self) -> List[SceneNode]:
-        selection = Selection.getAllSelectedObjects()[:]
+        selection = Selection.getAllSelectedObjects()
         if selection:
-            deep_selection = []  # type: List[SceneNode]
+            deep_selection: List[SceneNode] = []
             for selected_node in selection:
                 if selected_node.hasChildren():
                     deep_selection = deep_selection + selected_node.getAllChildren()
@@ -536,7 +540,7 @@ class TabPlus(Tool):
 
         return []
 
-    # Automatix creation    
+    # Automatic creation
     def addAutoSupportMesh(self) -> int:
         nb_Tab=0
         act_position = Vector(99999.99,99999.99,99999.99)
@@ -546,7 +550,7 @@ class TabPlus(Tool):
         if not nodes_list:
             nodes_list = DepthFirstIterator(self._application.getController().getScene().getRoot())
         
-        self._op = GroupedOperation()   
+        scene_op = GroupedOperation()   
         for node in nodes_list:
             if node.callDecoration("isSliceable"):
                 Logger.log('d', "isSliceable : {}".format(node.getName()))
@@ -562,7 +566,7 @@ class TabPlus(Tool):
                         Logger.log('d', "Mesh : {}".format(node.getName()))
                         
                         #hull_polygon = node.callDecoration("getConvexHull")
-                        if self._AdhesionArea :
+                        if self._adhesion_area :
                             hull_polygon = node.callDecoration("getAdhesionArea")
                         else:
                             # hull_polygon = node.callDecoration("getConvexHull")
@@ -598,11 +602,11 @@ class TabPlus(Tool):
                                 lgfl=(first_pt-new_position).length()
                                  
                                 # Logger.log('d', "Length First Last : {}".format(lgfl))
-                                if lght >= (self._UseSize*0.5) and lgfl >= (self._UseSize*0.5) :
+                                if lght >= (self._tab_size*0.5) and lgfl >= (self._tab_size*0.5) :
                                     self._createSupportMesh(node, new_position)
                                     act_position = new_position                               
                             else:
-                                if lght >= (self._UseSize*0.5) :
+                                if lght >= (self._tab_size*0.5) :
                                     self._createSupportMesh(node, new_position)
                                     act_position = new_position
                                  
@@ -612,7 +616,7 @@ class TabPlus(Tool):
                             # if act_node:
                             #     Logger.log('d', "Mesh To Add : {}".format(act_node.getName()))
                             #     self._createSupportMesh(act_node, Vector(point[0], 0, point[1]))  
-        self._op.push() 
+        scene_op.push()
         return nb_Tab
 
     def getSMsg(self) -> bool:
@@ -631,7 +635,7 @@ class TabPlus(Tool):
         """ 
             return: golabl _UseSize  in mm.
         """           
-        return self._UseSize
+        return self._tab_size
   
     def setSSize(self, SSize: str) -> None:
         """
@@ -646,39 +650,34 @@ class TabPlus(Tool):
         if s_value <= 0:
             return      
         #Logger.log('d', 's_value : ' + str(s_value))        
-        self._UseSize = s_value
-        self._preferences.setValue("tab_plus/p_size", s_value)
+        self._tab_size = s_value
+        self._preferences.setValue("tabawreborn/tab_size", s_value)
  
-    def getNLayer(self) -> int:
-        """ 
-            return: golabl _Nb_Layer
-        """           
-        return self._Nb_Layer
+    def getLayerCount(self) -> int:
+        """Tool getter for layer count"""
+        return self._layer_count
   
-    def setNLayer(self, NLayer: str) -> None:
-        """
-        param NLayer: NLayer as integer >1
-        """
- 
+    def setLayerCount(self, value: str) -> None:
+        """Tool setter for layer count"""
         try:
-            i_value = int(NLayer)
+            int_value = int(value)
             
         except ValueError:
             return  
  
-        if i_value < 1:
+        if int_value < 1:
             return
         
         self._Mesg3 = False
         #Logger.log('d', 'i_value : ' + str(i_value))        
-        self._Nb_Layer = i_value
-        self._preferences.setValue("tab_plus/nb_layer", i_value)
+        self._layer_count = int_value
+        self._preferences.setValue("tabawreborn/layer_count", int_value)
         
     def getSOffset(self) -> float:
         """ 
             return: golabl _UseOffset  in mm.
         """           
-        return self._UseOffset
+        return self._xy_offset
   
     def setSOffset(self, SOffset: str) -> None:
         """
@@ -692,33 +691,33 @@ class TabPlus(Tool):
         
         #Logger.log('d', 's_value : ' + str(s_value)) 
         self._Mesg2 = False        
-        self._UseOffset = s_value
-        self._preferences.setValue("tab_plus/p_offset", s_value)
+        self._xy_offset = s_value
+        self._preferences.setValue("tabawreborn/xy_offset", s_value)
 
     def getSCapsule(self) -> bool:
         """ 
             return: golabl _AsCapsule  as boolean
         """           
-        return self._AsCapsule
+        return self._dish
   
     def setSCapsule(self, SCapsule: bool) -> None:
         """
         param SCapsule: as boolean.
         """
         self._Mesg1 = False
-        self._AsCapsule = SCapsule
-        self._preferences.setValue("tab_plus/as_capsule", SCapsule)
+        self._dish = SCapsule
+        self._preferences.setValue("tabawreborn/create_dish", SCapsule)
         
     def getSArea(self) -> bool:
         """ 
             return: golabl _SArea  as boolean
         """           
-        return self._AdhesionArea
+        return self._adhesion_area
   
     def setSArea(self, SArea: bool) -> None:
         """
         param SArea: as boolean.
         """
-        self._AdhesionArea = SArea
-        self._preferences.setValue("tab_plus/adhesion_area", SArea)
+        self._adhesion_area = SArea
+        self._preferences.setValue("tabawreborn/adhesion_area", SArea)
 
