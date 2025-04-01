@@ -2,18 +2,18 @@
 # Based on the SupportBlocker plugin by Ultimaker B.V., and licensed under LGPLv3 or higher.
 # https://github.com/Ultimaker/Cura/tree/master/plugins/SupportEraser
 # Tab+ Anti Warping Copyright (c) 2022 5axes https://github.com/5axes/TabPlus
-# Reborn version by Slashee the Cow copyright 2025-
+# Tab Anti-Warping Reborn version by Slashee the Cow copyright 2025-
 #--------------------------------------------------------------------------------------------
 # Changelog (Reborn version)
 #
 # v1.0.0
 # - Renamed everything inside and out, so it won't interfere with older versions if installed side by side. Also so that it has the new name.
 # - Removed "set on adhesion area" option. I honestly can't understand why it existed. If there's something I'm missing, by all means get in touch.
-# - 
+# - Renamed "capsule" to "dish". I would have gone with "plate" but the inner construction block afficionado won't let me call something that isn't flat "plate".
 
 import math
 import os.path
-from typing import List, Optional
+from typing import List
 
 import numpy
 from cura.CuraApplication import CuraApplication
@@ -22,7 +22,7 @@ from cura.PickingPass import PickingPass
 from cura.Scene.BuildPlateDecorator import BuildPlateDecorator
 from cura.Scene.CuraSceneNode import CuraSceneNode
 from cura.Scene.SliceableObjectDecorator import SliceableObjectDecorator
-from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QApplication
 from UM.Event import Event, MouseEvent
 from UM.i18n import i18nCatalog
@@ -37,12 +37,8 @@ from UM.Resources import Resources
 from UM.Scene.Iterator.DepthFirstIterator import DepthFirstIterator
 from UM.Scene.SceneNode import SceneNode
 from UM.Scene.Selection import Selection
-from UM.Scene.ToolHandle import ToolHandle
 from UM.Settings.SettingInstance import SettingInstance
 from UM.Tool import Tool
-from UM.Version import Version
-
-fdmprinter_catalog = i18nCatalog("fdmprinter.def.json")
 
 Resources.addSearchPath(
     os.path.join(os.path.abspath(os.path.dirname(__file__)))
@@ -51,7 +47,7 @@ Resources.addSearchPath(
 catalog = i18nCatalog("tabawreborn")
 
 if catalog.hasTranslationLoaded():
-    Logger.log("i", "Tab Anti Warping Reborn plugin translation loaded")
+    Logger.log("i", "Tab Anti-Warping Reborn plugin translation loaded")
     
 DEBUG_MODE = True
 
@@ -70,38 +66,30 @@ def log(level, message):
 
 class TabAnitWarpingReborn(Tool):
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         
-        # Stock Data  
+        # List of tabs we've created
         self._scene_tabs = []
         
         
-        # variable for menu dialog        
+        # variable for menu dialog
         self._tab_size = 0.0
-        self._xy_offset = 0.0
+        self._xy_distance = 0.0
         self._as_dish = False
         self._layer_count = 1
-        self._Mesg1 = False
-        self._Mesg2 = False
-        self._Mesg3 = False
+        
+        
+        self._any_as_dish = False # Track if any dish supports have been created
 
 
         # Shortcut
         self._shortcut_key = Qt.Key.Key_J
-            
         self._controller = self.getController()
-
         self._selection_pass = None
-        
         self._application = CuraApplication.getInstance()
-
-
         
-        # Logger.log('d', "Info Version CuraVersion --> " + str(Version(CuraVersion)))
-        #log('d', "Info CuraVersion --> " + str(CuraVersion))
-        
-        self.setExposedProperties("TabSize", "XYOffset", "AsDish", "LayerCount")
+        self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount")
         
         CuraApplication.getInstance().globalContainerStackChanged.connect(self._updateEnabled)
         
@@ -122,12 +110,12 @@ class TabAnitWarpingReborn(Tool):
         # set the preferences to store the default value
         self._preferences = CuraApplication.getInstance().getPreferences()
         self._preferences.addPreference("tabawreborn/tab_size", 10)
-        self._preferences.addPreference("tabawreborn/xy_offset", 0.16)
+        self._preferences.addPreference("tabawreborn/xy_distance", 0.16)
         self._preferences.addPreference("tabawreborn/create_dish", False)
         self._preferences.addPreference("tabawreborn/layer_count", 1)
         
         self._tab_size = float(self._preferences.getValue("tabawreborn/tab_size"))
-        self._xy_offset = float(self._preferences.getValue("tabawreborn/xy_offset"))
+        self._xy_distance = float(self._preferences.getValue("tabawreborn/xy_distance"))
         self._as_dish = bool(self._preferences.getValue("tabawreborn/create_dish"))
         self._layer_count = int(self._preferences.getValue("tabawreborn/layer_count"))
 
@@ -177,9 +165,9 @@ class TabAnitWarpingReborn(Tool):
             log("d", f"picked_position = X{picked_position.x} Y{picked_position.y}")
                             
             # Add the support_mesh cube at the picked location
-            self._op = GroupedOperation()
+            scene_op = GroupedOperation()
             self._createSupportMesh(picked_node, picked_position)
-            self._op.push() 
+            scene_op.push()
 
     def _createSupportMesh(self, parent: CuraSceneNode, position: Vector):
         node = CuraSceneNode()
@@ -193,11 +181,10 @@ class TabAnitWarpingReborn(Tool):
         
         # This function can be triggered in the middle of a machine change, so do not proceed if the machine change
         # has not done yet.
-        global_container_stack = CuraApplication.getInstance().getGlobalContainerStack()
+        global_stack = CuraApplication.getInstance().getGlobalContainerStack()
         #extruder = global_container_stack.extruderList[int(_id_ex)] 
-        extruder_stack = CuraApplication.getInstance().getExtruderManager().getActiveExtruderStacks()[0]     
-        extruder_count=global_container_stack.getProperty("machine_extruder_count", "value") 
-        #Logger.log('d', "Info Extruder_count --> " + str(extruder_count))   
+        extruder_stack = CuraApplication.getInstance().getExtruderManager().getActiveExtruderStacks()[0]
+        #Logger.log('d', "Info Extruder_count --> " + str(extruder_count))
         
         # Reasonable defaults for the "standard" 0.4mm nozzle
         layer_height_0: float = 0.3
@@ -217,6 +204,7 @@ class TabAnitWarpingReborn(Tool):
         if self._as_dish:
              # Capsule creation Diameter , Increment angle 10°, length, layer_height_0*1.2 , line_width
             mesh = self._create_dish(self._tab_size, 10, tab_height, tab_layer_height, tab_line_width)
+            self._any_as_dish = True
         else:
             # Cylinder creation Diameter , Increment angle 10°, length, layer_height_0*1.2
             mesh = self._createCylinder(self._tab_size, 10, tab_height, tab_layer_height)
@@ -245,70 +233,46 @@ class TabAnitWarpingReborn(Tool):
         settings.addInstance(new_instance)
  
         # Define support_type
-        if self._as_dish:
-            key="support_type"
-            s_p = global_container_stack.getProperty(key, "value")
-            if s_p ==  'buildplate' and not self._Mesg1 :
-                definition_key=key + " label"
-                untranslated_label=extruder_stack.getProperty(key,"label")
-                translated_label=fdmprinter_catalog.i18nc(definition_key, untranslated_label)
-                Format_String = catalog.i18nc("@info:label", "Info modification current profile '") + translated_label  + catalog.i18nc("@info:label", "' parameter\nNew value : ") + catalog.i18nc("@info:label", "Everywhere")
-                Message(text = Format_String, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
-                Logger.log('d', 'support_type different : ' + str(s_p))
-                # Define support_type=everywhere
-                global_container_stack.setProperty(key, "value", 'everywhere')
-                self._Mesg1 = True
+        if self._any_as_dish or self._as_dish:
+            support_type_key="support_type"
+            support_placement = global_stack.getProperty(support_type_key, "value")
+            log("d", f"BEFORE: global stack support_type = {support_placement}")
+            if support_placement == "buildplate":
+                message_string = catalog.i18nc("@info:support_placement_modified", "Support placement has been set to Everywhere to ensure dish tabs work correctly.")
+                Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
+                global_stack.setProperty(support_type_key, "value", 'everywhere')
+                log("d", f"AFTER: global stack support_type = {global_stack.getProperty(support_type_key, 'value')}")
                
         # Define support_xy_distance
         definition = stack.getSettingDefinition("support_xy_distance")
         new_instance = SettingInstance(definition, settings)
-        new_instance.setProperty("value", self._xy_offset)
+        new_instance.setProperty("value", self._xy_distance)
         # new_instance.resetState()  # Ensure that the state is not seen as a user state.
         settings.addInstance(new_instance)
 
         # Fix some settings in Cura to get a better result
-        global_container_stack = CuraApplication.getInstance().getGlobalContainerStack()
-        extruder_stack = CuraApplication.getInstance().getExtruderManager().getActiveExtruderStacks()[0]
         #extruder = global_container_stack.extruderList[int(id_ex)]
-        
-        # Hop to fix it in a futur release
-        # https://github.com/Ultimaker/Cura/issues/9882
-        key="support_xy_distance"
-        _xy_distance = extruder_stack.getProperty(key, "value")
-        if self._xy_offset !=  _xy_distance and not self._Mesg2 :
-            _msg = "New value : %8.3f" % (self._xy_offset) 
-            definition_key=key + " label"
-            untranslated_label=extruder_stack.getProperty(key,"label")
-            translated_label=fdmprinter_catalog.i18nc(definition_key, untranslated_label) 
-            Format_String = catalog.i18nc("@info:label", "Info modification current profile '") + "%s" + catalog.i18nc("@info:label", "' parameter\nNew value : ") + "%8.3f"
-            Message(text = Format_String % (translated_label, self._xy_offset), title = catalog.i18nc("@info:setting_modification_title", "Tab Anti Warping Reborn - Setting Modification")).show()
-            Logger.log('d', 'support_xy_distance different : ' + str(_xy_distance))
-            # Define support_xy_distance
-            if extruder_count > 1 :
-                global_container_stack.setProperty("support_xy_distance", "value", self._xy_offset)
-            else:
-                extruder_stack.setProperty("support_xy_distance", "value", self._xy_offset)
-            
-            self._Mesg2 = True
- 
-        if self._layer_count >1 :
-            key="support_infill_rate"
-            s_p = int(extruder_stack.getProperty(key, "value"))
-            Logger.log('d', 'support_infill_rate actual : ' + str(s_p))
-            if s_p < 99 and not self._Mesg3 :
-                definition_key=key + " label"
-                untranslated_label=extruder_stack.getProperty(key,"label")
-                translated_label=fdmprinter_catalog.i18nc(definition_key, untranslated_label)     
-                Format_String = catalog.i18nc("@info:label", "Info modification current profile '") + translated_label + catalog.i18nc("@info:label", "' parameter\nNew value : ")+ catalog.i18nc("@info:label", "100%")                
-                Message(text = Format_String , title = catalog.i18nc("@info:setting_modification_title", "Tab Anti Warping Reborn - Setting Modification")).show()
-                Logger.log('d', 'support_infill_rate different : ' + str(s_p))
-                # Define support_infill_rate=100%
-                if extruder_count > 1 :
-                    global_container_stack.setProperty("support_infill_rate", "value", 100)
-                else:
-                    extruder_stack.setProperty("support_infill_rate", "value", 100)
+
+        support_xy_key="support_xy_distance"
+        stack_xy_distance = global_stack.getProperty(support_xy_key, "value")
+        log("d", f"BEFORE: global stack xy_distance = {stack_xy_distance}")
+        if self._xy_distance != stack_xy_distance:
+            message_string = f'{catalog.i18nc("@info:support_xy_modified", "Support X/Y distance has been changed to match tab tool settings of")} {str(self._xy_distance)}mm.'
+            Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
+            global_stack.setProperty(support_xy_key, "value", self._xy_distance)
+            log("d", f"AFTER: global stack support_type = {global_stack.getProperty(support_xy_key, 'value')}")
+
+        # Support infill (more than 1 layer needs to be solid)
+        if self._layer_count > 1:
+            support_infill_key="support_infill_rate"
+            support_infill = float(extruder_stack.getProperty(support_infill_key, "value"))
+            log("d", f"BEFORE: global stack support_infill = {support_infill}")
+            if support_infill < 100.0:
+                message_string = catalog.i18nc("@info:support_infill_modified", "Support density has been set to 100% to ensure tabs over 1 layer high are solid.")
+                Message(text = message_string , title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
+                global_stack.setProperty(support_infill_key, "value", 100)
+                log("d", f"AFTER: global stack support_infill = {extruder_stack.getProperty(support_infill_key, 'value')}")
                 
-                self._Mesg3 = True
         
         scene_op = GroupedOperation()
         # First add node to the scene at the correct position/scale, before parenting, so the support mesh does not get scaled with the parent
@@ -335,6 +299,7 @@ class TabAnitWarpingReborn(Tool):
         CuraApplication.getInstance().getController().getScene().sceneChanged.emit(node)
 
     def _updateEnabled(self):
+        """Run when global container stack changes to make sure settings we need are still applied"""
         plugin_enabled = False
         global_container_stack = CuraApplication.getInstance().getGlobalContainerStack()
 
@@ -445,7 +410,7 @@ class TabAnitWarpingReborn(Tool):
         indices = []
         # for every angle increment 24 Vertices
         total = segment_angle * 24
-        for i in range(0, total, 3): # 
+        for i in range(0, total, 3):
             indices.append([i, i+1, i+2])
         mesh.setIndices(numpy.asarray(indices, dtype=numpy.int32))
 
@@ -497,22 +462,14 @@ class TabAnitWarpingReborn(Tool):
     def removeAllSupportMesh(self):
         if self._scene_tabs:
             for node in self._scene_tabs:
-                node_stack = node.callDecoration("getStack")
-                if node_stack.getProperty("support_mesh", "value"):
-                    self._removeSupportMesh(node)
-            self._scene_tabs = []
+                if node:
+                    node_stack = node.callDecoration("getStack")
+                    if node_stack.getProperty("support_mesh", "value"):
+                        self._removeSupportMesh(node)
+            self._scene_tabs.clear()
+            self._any_as_dish = False
             self.propertyChanged.emit()
-        else:        
-            for node in DepthFirstIterator(self._application.getController().getScene().getRoot()):
-                if node.callDecoration("isSliceable"):
-                    # N_Name=node.getName()
-                    # Logger.log('d', 'isSliceable : ' + str(N_Name))
-                    node_stack=node.callDecoration("getStack")
-                    if node_stack:
-                        if node_stack.getProperty("support_mesh", "value"):
-                            # N_Name=node.getName()
-                            # Logger.log('d', 'support_mesh : ' + str(N_Name))
-                            self._removeSupportMesh(node)
+            Message(text = catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."), title=catalog.i18nc("remove_all_title", "Tab Anti-Warping Reborn"))
  
     # Source code from MeshTools Plugin 
     # Copyright (c) 2020 Aldo Hoeben / fieldOfView
@@ -523,7 +480,7 @@ class TabAnitWarpingReborn(Tool):
             for selected_node in selection:
                 if selected_node.hasChildren():
                     deep_selection = deep_selection + selected_node.getAllChildren()
-                if selected_node.getMeshData() != None:
+                if selected_node.getMeshData() is not None:
                     deep_selection.append(selected_node)
             if deep_selection:
                 return deep_selection
@@ -538,7 +495,7 @@ class TabAnitWarpingReborn(Tool):
         nodes_list = self._getAllSelectedNodes()
         if not nodes_list:
             nodes_list = DepthFirstIterator(self._application.getController().getScene().getRoot())
-        
+
         scene_op = GroupedOperation()
         for node in nodes_list:
             if not node.callDecoration("isSliceable"):
@@ -551,23 +508,23 @@ class TabAnitWarpingReborn(Tool):
             type_cutting_mesh = node_stack.getProperty("cutting_mesh", "value")
             type_support_mesh = node_stack.getProperty("support_mesh", "value")
             type_anti_overhang_mesh = node_stack.getProperty("anti_overhang_mesh", "value") 
-            
+
             if any(type_infill_mesh, type_cutting_mesh, type_support_mesh, type_anti_overhang_mesh):
                 continue
             log("d", f"{node.getName()} is a valid mesh")
-            
+
             hull_polygon = node.callDecoration("_compute2DConvexHull")
-            
+
             # Make sure it's a valid polygon
             if len(hull_polygon.getPoints() < 3):
                 log("w", f"{node.getName()} didn't produce a valid convex hull")
                 continue
-                
+
             points=hull_polygon.getPoints()
-            
+
             last_tab_position = None
             first_point = Vector([points][0][0], 0, points[0][1])
-            
+
             for i, point in enumerate(points):
                 new_position = Vector(point[0], 0, point[1])
                 difference_vector = last_tab_position - new_position if last_tab_position else Vector(0,0,0)
@@ -581,27 +538,21 @@ class TabAnitWarpingReborn(Tool):
 
         scene_op.push()
 
-    def getTabSize(self) -> float:
-        """ 
-            return: golabl _UseSize  in mm.
-        """           
+    def getTabSize(self) -> float:    
         return self._tab_size
   
     def setTabSize(self, TabSize: str) -> None:
-        """
-        param TabSize: Size in mm.
-        """
- 
         try:
-            new_value = float(TabSize)
+            float_value = float(TabSize)
         except ValueError:
+            log("e", "setTabSize was passed something that could not be cast to a float")
             return
 
-        if new_value <= 0:
-            return      
+        if float_value <= 0:
+            return
         #Logger.log('d', 's_value : ' + str(s_value))        
-        self._tab_size = new_value
-        self._preferences.setValue("tabawreborn/tab_size", new_value)
+        self._tab_size = float_value
+        self._preferences.setValue("tabawreborn/tab_size", float_value)
  
     def getLayerCount(self) -> int:
         """Tool getter for layer count"""
@@ -613,47 +564,34 @@ class TabAnitWarpingReborn(Tool):
             int_value = int(value)
             
         except ValueError:
-            return  
+            log("e", "setLayerCount was passed something that could not be cast to a int")
+            return
  
         if int_value < 1:
             return
         
-        self._Mesg3 = False
         #Logger.log('d', 'i_value : ' + str(i_value))        
         self._layer_count = int_value
         self._preferences.setValue("tabawreborn/layer_count", int_value)
         
-    def getXYOffset(self) -> float:
-        """ 
-            return: golabl _UseOffset  in mm.
-        """           
-        return self._xy_offset
+    def getXYDistance(self) -> float:
+        return self._xy_distance
   
-    def setXYOffset(self, XYOffset: str) -> None:
-        """
-        param XYOffset: XYOffset in mm.
-        """
- 
+    def setXYDistance(self, XYDistance: str) -> None:
         try:
-            new_value = float(XYOffset)
+            float_value = float(XYDistance)
         except ValueError:
+            log("e", "setXYDistance was passed something that could not be cast to a float")
             return
         
         #Logger.log('d', 's_value : ' + str(s_value)) 
-        self._Mesg2 = False
-        self._xy_offset = new_value
-        self._preferences.setValue("tabawreborn/xy_offset", new_value)
+        self._xy_distance = float_value
+        self._preferences.setValue("tabawreborn/xy_distance", float_value)
 
     def getAsDish(self) -> bool:
-        """     
-            return: _as_dish  as boolean
-        """           
         return self._as_dish
-  
+
     def setAsDish(self, AsDish: bool) -> None:
-        """
-        param AsDish: as boolean.
-        """
-        self._Mesg1 = False
         self._as_dish = AsDish
         self._preferences.setValue("tabawreborn/create_dish", AsDish)
+        
