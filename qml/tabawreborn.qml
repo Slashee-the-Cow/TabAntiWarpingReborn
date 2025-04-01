@@ -1,10 +1,10 @@
 //-----------------------------------------------------------------------------
-// Copyright (c) 2022 5@xes
-// 
+// Tab+ Anti-Warping Copyright (c) 2022 5@xes
+// Reborn version copyright Slashee the Cow 2025-
 // proterties values
 //   "SSize"    : Tab Size in mm
 //   "SOffset"  : Offset set on Tab in mm
-//   "SCapsule" : Define as capsule
+//   "AsDish" : Define as dish
 //   "SArea" 	: Set on Adhesion Area
 //   "NLayer"   : Number of layer
 //   "SMsg"     : Text for the Remove All Button
@@ -133,8 +133,8 @@ Item
 		{
 			id: useCapsuleCheckbox
 			text: catalog.i18nc("@option:check","Define as Capsule")
-			checked: UM.ActiveTool.properties.getValue("SCapsule")
-			onClicked: UM.ActiveTool.setProperty("SCapsule", checked)
+			checked: UM.ActiveTool.properties.getValue("AsDish")
+			onClicked: UM.ActiveTool.setProperty("AsDish", checked)
 		}
 
 		/*UM.SimpleButton
@@ -196,15 +196,4 @@ Item
 		text: catalog.i18nc("@label", "Automatic Addition")
 		onClicked: UM.ActiveTool.triggerAction("addAutoSupportMesh")
 	}
-	
-
-	UM.CheckBox
-	{
-		id: useAreaCheckbox
-		anchors.top: bottomRect.bottom
-		text: catalog.i18nc("@option:check","Set On Adhesion Area")
-		checked: UM.ActiveTool.properties.getValue("SArea")
-		onClicked: UM.ActiveTool.setProperty("SArea", checked)
-	}
-
 }
