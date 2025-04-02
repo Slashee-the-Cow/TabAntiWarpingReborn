@@ -2,23 +2,24 @@
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
 <svg width="100%" height="100%" viewBox="0 0 1182 1182" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;">
     <g transform="matrix(0.945724,0,0,0.945724,30.1615,42.5043)">
-        <g transform="matrix(0.889933,0,0,0.889933,65,106)">
-            <path d="M590.551,0L1152.2,408.061L937.668,1068.32L243.434,1068.32L28.904,408.061L590.551,0Z"/>
-        </g>
-        <g transform="matrix(1.41304,0,0,1.41304,-265.753,-96.087)">
+        <g transform="matrix(2.85282,0,0,2.85282,-1139.38,-218.306)">
             <circle cx="606" cy="114" r="46"/>
         </g>
-        <g transform="matrix(1.41304,0,0,1.41304,273.96,305.913)">
+        <g transform="matrix(2.85282,0,0,2.85282,-642.093,154.623)">
             <circle cx="606" cy="114" r="46"/>
         </g>
-        <g transform="matrix(1.41304,0,0,1.41304,68.2468,932.913)">
+        <g transform="matrix(2.85282,0,0,2.85282,-826.365,738.554)">
             <circle cx="606" cy="114" r="46"/>
         </g>
-        <g transform="matrix(1.41304,0,0,1.41304,-595.179,932.913)">
+        <g transform="matrix(2.85282,0,0,2.85282,-1447.8,738.554)">
             <circle cx="606" cy="114" r="46"/>
         </g>
-        <g transform="matrix(1.41304,0,0,1.41304,-806.753,305.913)">
+        <g transform="matrix(2.85282,0,0,2.85282,-1625.08,123.957)">
             <circle cx="606" cy="114" r="46"/>
+        </g>
+        <g transform="matrix(0.83577,0,0,0.83577,95.86,133.973)">
+            <path d="M590.551,0L1152.2,408.061L937.668,1068.32L243.434,1068.32L28.904,408.061L590.551,0Z" style="fill:white;"/>
+            <path d="M590.551,0L1152.2,408.061L937.668,1068.32L243.434,1068.32L28.904,408.061L590.551,0ZM590.551,58.225L84.279,426.053L277.658,1021.22L903.444,1021.22L1096.83,426.053L590.551,58.225Z"/>
         </g>
     </g>
 </svg>

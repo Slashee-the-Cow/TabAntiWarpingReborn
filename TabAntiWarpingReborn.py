@@ -24,6 +24,7 @@
 # - Tried to improve the linter's mood by type hinting a bunch of stuff. I don't think it's any more impressed.
 # - Put in a bunch of logging so when it inevitably fails hopefully I'll be able to figure out why.
 # - Had to put a Cura version check and add wrapper functions in the UI because in 5.7 they deprecated the way a tool accesses the backend in favour of a different way introduced in 5.7.
+# - Setting for density of auto generated tabs (minimum distance being radius or diameter) for those into Feng Shui and don't want clutter.
 
 import math
 import os.path
@@ -36,7 +37,8 @@ from cura.PickingPass import PickingPass
 from cura.Scene.BuildPlateDecorator import BuildPlateDecorator
 from cura.Scene.CuraSceneNode import CuraSceneNode
 from cura.Scene.SliceableObjectDecorator import SliceableObjectDecorator
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QVariant
+from PyQt6.QtQml import QJSValue
 from PyQt6.QtWidgets import QApplication
 from UM.Event import Event, MouseEvent
 from UM.i18n import i18nCatalog
@@ -101,7 +103,7 @@ class TabAnitWarpingReborn(Tool):
         self._selection_pass = None
         self._application = CuraApplication.getInstance()
         
-        self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount", "InputsValid")
+        self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount", "InputsValid", "LogMessage")
         
         CuraApplication.getInstance().globalContainerStackChanged.connect(self._updateEnabled)
         
@@ -131,7 +133,6 @@ class TabAnitWarpingReborn(Tool):
         self._as_dish = bool(self._preferences.getValue("tabawreborn/create_dish"))
         self._layer_count = int(self._preferences.getValue("tabawreborn/layer_count"))
 
-
     def event(self, event):
         super().event(event)
         modifiers = QApplication.keyboardModifiers()
@@ -152,13 +153,22 @@ class TabAnitWarpingReborn(Tool):
                 # The selection renderpass is used to identify objects in the current view
                 self._selection_pass = CuraApplication.getInstance().getRenderer().getRenderPass("selection")
             picked_node = self._controller.getScene().findObject(self._selection_pass.getIdAtPosition(event.x, event.y))
+            
             if not picked_node:
                 # There is no slicable object at the picked location
                 return
-            
+            log("d", f"picked_node = {picked_node}")
             if not self._inputs_valid:
-                Message(text = catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check to the tool's settings."), title = catalog.i18nc("add_tab_invalid_input_title", "Tab Anti-Warping Reborn")).show()
+                Message(text = catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."),
+                        title = catalog.i18nc("add_tab_invalid_input_title", "Tab Anti-Warping Reborn")).show()
                 return
+            
+            node_world_transform = picked_node.getWorldTransformation()
+            if node_world_transform:
+                node_position = node_world_transform.getTranslation()
+                log("d", f"picked_node world position = {node_position}")
+            else:
+                log("d", "picked_node has no world transformation")
 
             node_stack = picked_node.callDecoration("getStack")
 
@@ -176,9 +186,10 @@ class TabAnitWarpingReborn(Tool):
             picking_pass = PickingPass(active_camera.getViewportWidth(), active_camera.getViewportHeight())
             picking_pass.render()
 
+            log("d", f"event.x = {event.x}, event.y = {event.y}")
             picked_position = picking_pass.getPickedPosition(event.x, event.y)
 
-            log("d", f"picked_position = X{picked_position.x} Y{picked_position.y}")
+            log("d", f"repr(picked_position) = {repr(picked_position)}")
                             
             # Add the support_mesh cube at the picked location
             scene_op = GroupedOperation()
@@ -193,7 +204,7 @@ class TabAnitWarpingReborn(Tool):
         node.setSelectable(True)
         
         # long=Support Height
-        tab_height=position.y
+        tab_start_y=position.y
         
         # This function can be triggered in the middle of a machine change, so do not proceed if the machine change
         # has not done yet.
@@ -214,16 +225,16 @@ class TabAnitWarpingReborn(Tool):
         except ValueError as e:
             log("e", f"Error encountered getting properties from the extruder_stack: {e}")
         
-        tab_layer_height = (layer_height_0 * 1.2) + (layer_height * (self._layer_count -1))
+        tab_total_height = (layer_height_0 * 1.2) + (layer_height * (self._layer_count -1))
         tab_line_width = line_width * 1.2
         
         if self._as_dish:
              # Capsule creation Diameter , Increment angle 10°, length, layer_height_0*1.2 , line_width
-            mesh = self._create_dish(self._tab_size, 10, tab_height, tab_layer_height, tab_line_width)
+            mesh = self._create_dish(self._tab_size, 10, tab_start_y, tab_total_height, tab_line_width)
             self._any_as_dish = True
         else:
             # Cylinder creation Diameter , Increment angle 10°, length, layer_height_0*1.2
-            mesh = self._createCylinder(self._tab_size, 10, tab_height, tab_layer_height)
+            mesh = self._createCylinder(self._tab_size, 10, tab_start_y, tab_total_height)
         
         
         node.setMeshData(mesh.build())
@@ -286,7 +297,7 @@ class TabAnitWarpingReborn(Tool):
             if support_infill < 100.0:
                 message_string = catalog.i18nc("@info:support_infill_modified", "Support density has been set to 100% to ensure tabs over 1 layer high are solid.")
                 Message(text = message_string , title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
-                global_stack.setProperty(support_infill_key, "value", 100)
+                global_stack.setProperty(support_infill_key, "value", 100.0)
                 log("d", f"AFTER: global stack support_infill = {extruder_stack.getProperty(support_infill_key, 'value')}")
                 
         
@@ -434,13 +445,13 @@ class TabAnitWarpingReborn(Tool):
         return mesh
         
     # Cylinder creation
-    def _createCylinder(self, base_diameter: float, segments: int, height: float, top_height: float):
+    def _createCylinder(self, base_diameter: float, segments: int, start_y: float, cylinder_height: float):
         mesh = MeshBuilder()
         # Per-vertex normals require duplication of vertices
         base_radius = base_diameter / 2
         # First layer length
-        max_y = -height + top_height
-        min_y = -height
+        max_y = -start_y + cylinder_height
+        min_y = -start_y
         segment_angle = int(360 / segments)
         segment_radians = math.radians(segments)
         
@@ -506,8 +517,21 @@ class TabAnitWarpingReborn(Tool):
         return []
 
     # Automatic creation
-    def addAutoSupportMesh(self) -> None:
-
+    def addAutoSupportMesh(self, data:QJSValue) -> None:
+        log("d", f"addAutoSupportMesh got data {repr(data)}")
+        dense = True
+        # Make sure data is the right type before we mess with it:
+        if data is not None and isinstance(data, QJSValue):
+            # Convert it to a QVariant
+            variant = data.toVariant()
+            # Hope our QVariant is a dict like we passed
+            if isinstance(variant, dict):
+                dense = variant.get("dense", True)
+                log("d", f"addAutoSupportMesh from QVariant {variant} got dense {dense}")
+            else:
+                log("d", f"addAutoSupportMesh got QVariant {variant} which isn't a dict")
+        else:
+            log("d", f"addAutoSupportMesh did not get a QJSValue passed to it. It got {data}")
         nodes_list = self._getAllSelectedNodes()
         if not nodes_list:
             nodes_list = DepthFirstIterator(self._application.getController().getScene().getRoot())
@@ -525,21 +549,22 @@ class TabAnitWarpingReborn(Tool):
             type_support_mesh = node_stack.getProperty("support_mesh", "value")
             type_anti_overhang_mesh = node_stack.getProperty("anti_overhang_mesh", "value") 
 
-            if any(type_infill_mesh, type_cutting_mesh, type_support_mesh, type_anti_overhang_mesh):
+            if any((type_infill_mesh, type_cutting_mesh, type_support_mesh, type_anti_overhang_mesh)):
                 continue
             log("d", f"{node.getName()} is a valid mesh")
 
             hull_polygon = node.callDecoration("_compute2DConvexHull")
 
             # Make sure it's a valid polygon
-            if len(hull_polygon.getPoints() < 3):
+            if len(hull_polygon.getPoints()) < 3:
                 log("w", f"{node.getName()} didn't produce a valid convex hull")
                 continue
 
             points=hull_polygon.getPoints()
+            minimum_distance = self._tab_size * 0.5 if dense else self._tab_size
 
             last_tab_position = None
-            first_point = Vector([points][0][0], 0, points[0][1])
+            first_point = Vector(points[0][0], 0, points[0][1])
 
             for i, point in enumerate(points):
                 new_position = Vector(point[0], 0, point[1])
@@ -548,20 +573,22 @@ class TabAnitWarpingReborn(Tool):
                 difference_length = difference_vector.length() if last_tab_position else self._tab_size * 2
 
                 first_to_last_length = (first_point - new_position).length() if i == len(points) - 1 else 0
-                if difference_length >= self._tab_size * 0.5 or first_to_last_length >= self._tab_size * 0.5:
+                if difference_length >= minimum_distance or first_to_last_length >= minimum_distance:
                     self._createSupportMesh(node, new_position)
                     last_tab_position = new_position
 
         scene_op.push()
 
-    def getTabSize(self) -> float:    
+    def getTabSize(self) -> float:
+        #log("d", f"getTabSize accessed with self._tab_size = {self._tab_size}")
         return self._tab_size
   
     def setTabSize(self, TabSize: str) -> None:
+        #log("d", f"setTabSize run with {TabSize}")
         try:
             float_value = float(TabSize)
         except ValueError:
-            log("e", "setTabSize was passed something that could not be cast to a float")
+            #log("e", "setTabSize was passed something that could not be cast to a float")
             return
 
         if float_value <= 0:
@@ -571,14 +598,16 @@ class TabAnitWarpingReborn(Tool):
         self._preferences.setValue("tabawreborn/tab_size", float_value)
  
     def getLayerCount(self) -> int:
+        #log("d", f"getLayerCount accessed with self._layer_count = {self._layer_count}")
         return self._layer_count
   
-    def setLayerCount(self, value: str) -> None:
+    def setLayerCount(self, count: str) -> None:
+        #log("d", f"setLayerCount run with {count}")
         try:
-            int_value = int(value)
+            int_value = int(count)
             
         except ValueError:
-            log("e", "setLayerCount was passed something that could not be cast to a int")
+            #log("e", "setLayerCount was passed something that could not be cast to a int")
             return
  
         if int_value < 1:
@@ -589,13 +618,15 @@ class TabAnitWarpingReborn(Tool):
         self._preferences.setValue("tabawreborn/layer_count", int_value)
         
     def getXYDistance(self) -> float:
+        #log("d", f"getXYDistance accessed with self._xy_distance = {self._xy_distance}")
         return self._xy_distance
   
     def setXYDistance(self, XYDistance: str) -> None:
+        #log("d", f"setXYDistance run with {XYDistance}")
         try:
             float_value = float(XYDistance)
         except ValueError:
-            log("e", "setXYDistance was passed something that could not be cast to a float")
+            #log("e", "setXYDistance was passed something that could not be cast to a float")
             return
         
         #Logger.log('d', 's_value : ' + str(s_value)) 
@@ -603,14 +634,25 @@ class TabAnitWarpingReborn(Tool):
         self._preferences.setValue("tabawreborn/xy_distance", float_value)
 
     def getAsDish(self) -> bool:
+        #log("d", f"getAsDish accessed with self._as_dish = {self._as_dish}")
         return self._as_dish
 
     def setAsDish(self, AsDish: bool) -> None:
+        #log("d", f"setAsDish run with {AsDish}")
         self._as_dish = AsDish
         self._preferences.setValue("tabawreborn/create_dish", AsDish)
 
     def getInputsValid(self) -> bool:
+        #log("d", f"getInputsValid accessed with self._inputs_valid = {self._inputs_valid}")
         return self._inputs_valid
 
     def setInputsValid(self, InputValid: bool) -> None:
+        #log("d", f"setInputsValid run with {InputValid}")
         self._inputs_valid = InputValid
+
+    def getLogMessage(self) -> str:
+        """ This is just here so I can use the setter to log stuff. """
+        return ""
+    
+    def setLogMessage(self, message: str) -> None:
+        log("d", f"TabAntiWarpingReborn QML Log: {message}")

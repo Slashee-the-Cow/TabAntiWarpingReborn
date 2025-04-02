@@ -12,7 +12,7 @@ def getMetaData():
         
     return {
         "tool": {
-            "name": i18n_catalog.i18nc("@label", "Tab Anti Warping Reborn"),
+            "name": i18n_catalog.i18nc("@label", "Tab Anti-Warping Reborn"),
             "description": i18n_catalog.i18nc("@info:tooltip", "Add tabs to object bases to prevent warping."),
             "icon": "tool_icon.svg",
             "tool_panel": qml_file,

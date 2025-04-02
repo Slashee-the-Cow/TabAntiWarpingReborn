@@ -17,7 +17,7 @@ import UM 1.6 as UM
 import Cura 1.1 as Cura
 
 Item {
-    id: base
+    id: tabRebornPanel
 
     function getCuraVersion(){
         if(CuraApplication.version){
@@ -76,22 +76,30 @@ Item {
         }
     }
 
-    function validateInt(test, minimum = -Infinity, maximum = Infinity){
+    function triggerActionWithData(action, data){
+        if(isVersion57OrGreater()){
+            return UM.Controller.triggerActionWithData(action, data);
+        } else {
+            return UM.ActiveTool.triggerActionWithData(action, data);
+        }
+    }
+
+    function validateInt(test, min_value = -Infinity, max_value = Infinity){
         if (test === ""){return false;}
         let intTest = parseInt(test);
         if (isNaN(intTest)){return false;}
-        if (intTest < minimum){return false;}
-        if (intTest > maximum){return false;}
+        if (intTest < min_value){return false;}
+        if (intTest > max_value){return false;}
         return true;
     }
 
-    function validateFloat(test, minimum = -Infinity, maximum = Infinity){
+    function validateFloat(test, min_value = -Infinity, max_value = Infinity){
         if (test === ""){return false;}
         test = test.replace(",","."); // Use decimal separator computer understands
         let floatTest = parseFloat(test);
         if (isNaN(floatTest)){return false;}
-        if (floatTest < minimum){return false;}
-        if (floatTest > maximum){return false;}
+        if (floatTest < min_value){return false;}
+        if (floatTest > max_value){return false;}
         return true;
     }
 
@@ -108,15 +116,15 @@ Item {
         let xy_distance_valid = true;
         let layer_count_valid = true;
 
-        if (!validateFloat(tabSize, minimum = 0.1)){
+        if (!validateFloat(tabSize, 0.1)){
             tab_size_valid = false;
             message += catalog.i18nc("tab_size_invalid", "Tab size must be at least 0.1mm\n");
         }
-        if (!validateFloat(xyDistance, minimum = 0.01, maximum = 1)){
+        if (!validateFloat(xyDistance, 0.01, 1)){
             xy_distance_valid = false;
             message += catalog.i18nc("xy_distance_invalid", "X/Y Distance must be between 0.01 and 1mm\n");
         }
-        if (!validateInt(layerCount, minimum = 1, maximum = 100)){
+        if (!validateInt(layerCount, 1, 100)){
             layer_count_valid = false;
             message += catalog.i18nc("layer_count_invalid", "Layer count must be between 1 and 100\n")
         }
@@ -146,14 +154,16 @@ Item {
     property string layerCount: ""
     property bool inputsValid: false
     
-    property int localwidth:70
+    property int localwidth:UM.Theme.getSize("setting_control").width
 
     property string errorMessage: ""
 
+    property int textFieldMinWidth: 75
+
     Component.onCompleted: {
-        tabSize = getProperty(TabSize)
-        xyDistance = getProperty(XYDistance)
-        LayerCount = getProperty(LayerCount)
+        tabSize = getProperty("TabSize")
+        xyDistance = getProperty("XYDistance")
+        layerCount = getProperty("LayerCount")
         Qt.callLater(validateInputs)
     }
 
@@ -161,6 +171,15 @@ Item {
         id: mainColumn
         anchors.left: parent.left
         anchors.top: parent.top
+        UM.Label {
+            Layout.fillWidth: true
+            Layout.maximumWidth: 175
+            visible: tabRebornPanel.errorMessage != ""
+            id: error_text
+            text: tabRebornPanel.errorMessage
+            color: UM.Theme.getColor("error")
+            wrapMode: TextInput.Wrap
+        }
     
         GridLayout {
             id: controlLayout
@@ -178,7 +197,7 @@ Item {
 
             UM.TextFieldWithUnit {
                 id: sizeTextField
-                width: localwidth
+                Layout.minimumWidth: textFieldMinWidth
                 height: UM.Theme.getSize("setting_control").height
                 unit: "mm"
                 text: tabSize
@@ -199,7 +218,7 @@ Item {
 
             UM.TextFieldWithUnit {
                 id: xyDistanceTextField
-                width: localwidth
+                Layout.minimumWidth: textFieldMinWidth
                 height: UM.Theme.getSize("setting_control").height
                 unit: "mm"
                 text: xyDistance
@@ -218,10 +237,9 @@ Item {
                 text: catalog.i18nc("@label", "Number of layers")
             }
 
-            UM.TextFieldWithUnit
-            {
+            UM.TextFieldWithUnit{
                 id: layerCountTextField
-                width: localwidth
+                Layout.minimumWidth: textFieldMinWidth
                 height: UM.Theme.getSize("setting_control").height
                 text: layerCount
                 validator: IntValidator {
@@ -237,14 +255,13 @@ Item {
             UM.CheckBox {
                 id: asDishCheckbox
                 Layout.columnSpan: 2
-                text: catalog.i18nc("@label","Dish Shape")
+                text: catalog.i18nc("@label","Use Dish Shape")
                 checked: getProperty("AsDish")
                 onClicked: setProperty("AsDish", checked)
             }
         }
 
-        Cura.SecondaryButton
-        {
+        Cura.SecondaryButton{
             id: removeAllButton
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
@@ -255,8 +272,7 @@ Item {
             onClicked: triggerAction("removeAllSupportMesh")
         }
 
-        Cura.SecondaryButton
-        {
+        Cura.SecondaryButton{
             id: addAllButton
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
@@ -264,15 +280,23 @@ Item {
             width: UM.Theme.getSize("setting_control").width
             height: UM.Theme.getSize("setting_control").height    
             text: catalog.i18nc("@label", "Add Automatically")
-            onClicked: triggerAction("addAutoSupportMesh")
-        }
-
-        UM.Label {
-            Layout.fillWidth: true
-            id: error_text
-            text: base.errorMessage
-            color: UM.Theme.getColor("error")
-            wrapMode: TextInput.Wrap
+            //onClicked: triggerAction("addAutoSupportMesh")
+            onClicked: automaticAddDensity.open()
+            Menu{
+                id: automaticAddDensity
+                MenuItem{
+                    text: catalog.i18nc("density_menu", "More tabs (may overlap)")
+                    onClicked: {
+                        triggerActionWithData("addAutoSupportMesh", {dense: true})
+                    }
+                }
+                MenuItem{
+                    text: catalog.i18nc("density_menu", "Less tabs (may miss points)")
+                    onClicked: {
+                        triggerActionWithData("addAutoSupportMesh", {dense: false})
+                    }
+                }
+            }
         }
     }
 }
