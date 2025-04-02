@@ -76,11 +76,86 @@ Item {
         }
     }
 
+    function validateInt(test, minimum = -Infinity, maximum = Infinity){
+        if (test === ""){return false;}
+        let intTest = parseInt(test);
+        if (isNaN(intTest)){return false;}
+        if (intTest < minimum){return false;}
+        if (intTest > maximum){return false;}
+        return true;
+    }
+
+    function validateFloat(test, minimum = -Infinity, maximum = Infinity){
+        if (test === ""){return false;}
+        test = test.replace(",","."); // Use decimal separator computer understands
+        let floatTest = parseFloat(test);
+        if (isNaN(floatTest)){return false;}
+        if (floatTest < minimum){return false;}
+        if (floatTest > maximum){return false;}
+        return true;
+    }
+
+    property var default_field_background: UM.Theme.getColor("detail_background")
+    property var error_field_background: UM.Theme.getColor("setting_validation_error_background")
+
+    function getBackgroundColour(valid){
+        return valid ? default_field_background : error_field_background
+    }
+
+    function validateInputs(){
+        let message = "";
+        let tab_size_valid = true;
+        let xy_distance_valid = true;
+        let layer_count_valid = true;
+
+        if (!validateFloat(tabSize, minimum = 0.1)){
+            tab_size_valid = false;
+            message += catalog.i18nc("tab_size_invalid", "Tab size must be at least 0.1mm\n");
+        }
+        if (!validateFloat(xyDistance, minimum = 0.01, maximum = 1)){
+            xy_distance_valid = false;
+            message += catalog.i18nc("xy_distance_invalid", "X/Y Distance must be between 0.01 and 1mm\n");
+        }
+        if (!validateInt(layerCount, minimum = 1, maximum = 100)){
+            layer_count_valid = false;
+            message += catalog.i18nc("layer_count_invalid", "Layer count must be between 1 and 100\n")
+        }
+
+        if (tab_size_valid && xy_distance_valid && layer_count_valid){
+            setProperty("TabSize", parseFloat(tabSize))
+            setProperty("XYDistance", parseFloat(xyDistance))
+            setProperty("LayerCount", parseInt(layerCount))
+            inputsValid = true
+            setProperty("InputsValid", inputsValid)
+        } else {
+            inputsValid = false
+            setProperty("InputsValid", inputsValid)
+        }
+        errorMessage =  message
+        sizeTextField.background.color = getBackgroundColour(tab_size_valid)
+        xyDistanceTextField.background.color = getBackgroundColour(xy_distance_valid)
+        layerCountTextField.background.color = getBackgroundColour(layer_count_valid)
+    }
+
     width: childrenRect.width
     height: childrenRect.height
     UM.I18nCatalog { id: catalog; name: "tabawreborn"}
+
+    property string tabSize: ""
+    property string xyDistance: ""
+    property string layerCount: ""
+    property bool inputsValid: false
     
     property int localwidth:70
+
+    property string errorMessage: ""
+
+    Component.onCompleted: {
+        tabSize = getProperty(TabSize)
+        xyDistance = getProperty(XYDistance)
+        LayerCount = getProperty(LayerCount)
+        Qt.callLater(validateInputs)
+    }
 
     ColumnLayout {
         id: mainColumn
@@ -106,15 +181,15 @@ Item {
                 width: localwidth
                 height: UM.Theme.getSize("setting_control").height
                 unit: "mm"
-                text: getProperty("TabSize")
+                text: tabSize
                 validator: DoubleValidator {
                     decimals: 2
                     bottom: 0.1
                 }
 
-                onEditingFinished: {
-                    let modified_text = text.replace(",", ".");
-                    setProperty("TabSize", modified_text);
+                onTextChanged: {
+                    tabSize = text
+                    Qt.callLater(validateInputs)
                 }
             }
             
@@ -123,19 +198,19 @@ Item {
             }
 
             UM.TextFieldWithUnit {
-                id: offsetTextField
+                id: xyDistanceTextField
                 width: localwidth
                 height: UM.Theme.getSize("setting_control").height
                 unit: "mm"
-                text: getProperty("XYDistance")
+                text: xyDistance
                 validator: DoubleValidator {
                     top: 1
+                    bottom: 0.01
                     decimals: 2
                 }
-
-                onEditingFinished: {
-                    var modified_text = text.replace(",", "."); // User convenience. We use dots for decimal values
-                    setProperty("XYDistance", modified_text);
+                onTextChanged: {
+                    xyDistance = text
+                    Qt.callLater(validateInputs)
                 }
             }
 
@@ -145,85 +220,59 @@ Item {
 
             UM.TextFieldWithUnit
             {
-                id: numberlayerTextField
+                id: layerCountTextField
                 width: localwidth
                 height: UM.Theme.getSize("setting_control").height
-                text: UM.ActiveTool.properties.getValue("LayerCount")
+                text: layerCount
                 validator: IntValidator {
                     bottom: 1
                     top: 100
                 }
-
-                onEditingFinished: {
-                    setProperty("LayerCount", text)
+                onTextChanged: {
+                    layerCount = text
+                    Qt.callLater(validateInputs)
                 }
             }
 
             UM.CheckBox {
                 id: asDishCheckbox
-                text: catalog.i18nc("@label","Dish shape")
+                Layout.columnSpan: 2
+                text: catalog.i18nc("@label","Dish Shape")
                 checked: getProperty("AsDish")
                 onClicked: setProperty("AsDish", checked)
             }
-
-            /*UM.SimpleButton
-            {
-                id: helpButton
-                width: UM.Theme.getSize("save_button_specs_icons").width
-                height: UM.Theme.getSize("save_button_specs_icons").height
-                iconSource: UM.Theme.getIcon("Help")
-                hoverColor: UM.Theme.getColor("small_button_text_hover")
-                color:  UM.Theme.getColor("small_button_text")
-                
-                onClicked:
-                {
-                Qt.openUrlExternally(getlinkCurrent)
-                }
-            }*/
-        }
-
-        Rectangle {
-            id: topRect
-            anchors.top: textfields.bottom 
-            //color: UM.Theme.getColor("toolbar_background")
-            color: "#00000000"
-            width: UM.Theme.getSize("setting_control").width * 1.3
-            height: UM.Theme.getSize("setting_control").height 
-            anchors.left: parent.left
-            anchors.topMargin: UM.Theme.getSize("default_margin").height
         }
 
         Cura.SecondaryButton
         {
             id: removeAllButton
-            anchors.centerIn: topRect
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
             spacing: UM.Theme.getSize("default_margin").height
             width: UM.Theme.getSize("setting_control").width
             height: UM.Theme.getSize("setting_control").height    
-            text: catalog.i18nc("@label", "Remove all tabs")
+            text: catalog.i18nc("@label", "Remove All Tabs")
             onClicked: triggerAction("removeAllSupportMesh")
-        }
-
-        Rectangle {
-            id: bottomRect
-            anchors.top: topRect.bottom
-            //color: UM.Theme.getColor("toolbar_background")
-            color: "#00000000"
-            width: UM.Theme.getSize("setting_control").width * 1.3
-            height: UM.Theme.getSize("setting_control").height 
-            anchors.left: parent.left
-            anchors.topMargin: UM.Theme.getSize("default_margin").height
         }
 
         Cura.SecondaryButton
         {
             id: addAllButton
-            anchors.centerIn: bottomRect
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
             spacing: UM.Theme.getSize("default_margin").height
             width: UM.Theme.getSize("setting_control").width
             height: UM.Theme.getSize("setting_control").height    
-            text: catalog.i18nc("@label", "Automatic Addition")
+            text: catalog.i18nc("@label", "Add Automatically")
             onClicked: triggerAction("addAutoSupportMesh")
+        }
+
+        UM.Label {
+            Layout.fillWidth: true
+            id: error_text
+            text: base.errorMessage
+            color: UM.Theme.getColor("error")
+            wrapMode: TextInput.Wrap
         }
     }
 }

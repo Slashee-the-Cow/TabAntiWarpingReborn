@@ -2,14 +2,28 @@
 # Based on the SupportBlocker plugin by Ultimaker B.V., and licensed under LGPLv3 or higher.
 # https://github.com/Ultimaker/Cura/tree/master/plugins/SupportEraser
 # Tab+ Anti Warping Copyright (c) 2022 5axes https://github.com/5axes/TabPlus
-# Tab Anti-Warping Reborn version by Slashee the Cow copyright 2025-
+# Tab Anti-Warping Reborn by Slashee the Cow copyright 2025-
 #--------------------------------------------------------------------------------------------
 # Changelog (Reborn version)
 #
 # v1.0.0
-# - Renamed everything inside and out, so it won't interfere with older versions if installed side by side. Also so that it has the new name.
+# - Renamed everything inside and out, so it won't interfere with other versions if installed side by side. Also so that it has the new name.
+# - Took out Qt 5 support resulting in requiring Cura 5.0 or higher. If this affects you, you probably should have upgraded quite a while ago.
 # - Removed "set on adhesion area" option. I honestly can't understand why it existed. If there's something I'm missing, by all means get in touch.
-# - Renamed "capsule" to "dish". I would have gone with "plate" but the inner construction block afficionado won't let me call something that isn't flat "plate".
+# - Renamed "capsule" to "dish". Not my first choice but the inner construction brick afficionado won't let me call something that isn't flat "plate".
+# - Hopefully stopped the "remove all" button from removing things which aren't tabs. This might cause it to miss things which are tabs. I find this tradeoff acceptable.
+# - Cleaned up A LOT of code. When was the last time someone *cough* dusted this place?
+# - Redid the layout for the UI. Hopefully it doesn't look too different. Hopefully it's easier to maintain. That factor may be less important to you.
+# - Made the UI more responsive because there's lots of things neither of us have time for... I assume.
+# - Added copious amounts of input validation to the UI. Sorry if you were having fun trying to make tabs with invalid settings.
+# - Squashed a large quantity of bugs. My fingers are crossed that I missed the "fix one bug, add two more" paradigm.
+# - Implemented more checks to make sure Cura's settings are what they need to be for the plugin to work.
+# - Implemented UI explanations for why those settings need to be what they are for the plugin to work.
+# - Optimised some of the code. This may literally save you nanoseconds.
+# - Got rid of a whole bunch of docstrings that took up a lot of space but had very little to say in them. My linter is quite displeased with me.
+# - Tried to improve the linter's mood by type hinting a bunch of stuff. I don't think it's any more impressed.
+# - Put in a bunch of logging so when it inevitably fails hopefully I'll be able to figure out why.
+# - Had to put a Cura version check and add wrapper functions in the UI because in 5.7 they deprecated the way a tool accesses the backend in favour of a different way introduced in 5.7.
 
 import math
 import os.path
@@ -51,7 +65,7 @@ if catalog.hasTranslationLoaded():
     
 DEBUG_MODE = True
 
-def log(level, message):
+def log(level: str, message: str) -> None:
     """Wrapper function for logging messages using Cura's Logger, but with debug mode so as not to spam you."""
     if level == "d" and DEBUG_MODE:
         Logger.log("d", message)
@@ -72,16 +86,14 @@ class TabAnitWarpingReborn(Tool):
         # List of tabs we've created
         self._scene_tabs = []
         
-        
         # variable for menu dialog
-        self._tab_size = 0.0
-        self._xy_distance = 0.0
-        self._as_dish = False
-        self._layer_count = 1
-        
+        self._tab_size: float = 0.0
+        self._xy_distance: float = 0.0
+        self._as_dish: bool = False
+        self._layer_count: int = 1
+        self._inputs_valid: bool = False
         
         self._any_as_dish = False # Track if any dish supports have been created
-
 
         # Shortcut
         self._shortcut_key = Qt.Key.Key_J
@@ -89,7 +101,7 @@ class TabAnitWarpingReborn(Tool):
         self._selection_pass = None
         self._application = CuraApplication.getInstance()
         
-        self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount")
+        self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount", "InputsValid")
         
         CuraApplication.getInstance().globalContainerStackChanged.connect(self._updateEnabled)
         
@@ -99,8 +111,8 @@ class TabAnitWarpingReborn(Tool):
         # toolbar will have been disabled. That is why we need to ignore the first press event
         # after the selection has been cleared.
         Selection.selectionChanged.connect(self._onSelectionChanged)
-        self._had_selection = False
-        self._skip_press = False
+        self._had_selection: bool = False
+        self._skip_press: bool = False
 
         self._had_selection_timer = QTimer()
         self._had_selection_timer.setInterval(0)
@@ -142,6 +154,10 @@ class TabAnitWarpingReborn(Tool):
             picked_node = self._controller.getScene().findObject(self._selection_pass.getIdAtPosition(event.x, event.y))
             if not picked_node:
                 # There is no slicable object at the picked location
+                return
+            
+            if not self._inputs_valid:
+                Message(text = catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check to the tool's settings."), title = catalog.i18nc("add_tab_invalid_input_title", "Tab Anti-Warping Reborn")).show()
                 return
 
             node_stack = picked_node.callDecoration("getStack")
@@ -342,7 +358,7 @@ class TabAnitWarpingReborn(Tool):
         self._had_selection = has_selection
  
     # Capsule creation
-    def _create_dish(self, base_diameter, segments , height, top_height, line_width):
+    def _create_dish(self, base_diameter: float, segments: int , height: float, top_height: float, line_width: float):
         """Create a "dish" style adhesion tab"""
         mesh = MeshBuilder()
         # Per-vertex normals require duplication of vertices
@@ -418,7 +434,7 @@ class TabAnitWarpingReborn(Tool):
         return mesh
         
     # Cylinder creation
-    def _createCylinder(self, base_diameter, segments, height, top_height):
+    def _createCylinder(self, base_diameter: float, segments: int, height: float, top_height: float):
         mesh = MeshBuilder()
         # Per-vertex normals require duplication of vertices
         base_radius = base_diameter / 2
@@ -555,11 +571,9 @@ class TabAnitWarpingReborn(Tool):
         self._preferences.setValue("tabawreborn/tab_size", float_value)
  
     def getLayerCount(self) -> int:
-        """Tool getter for layer count"""
         return self._layer_count
   
     def setLayerCount(self, value: str) -> None:
-        """Tool setter for layer count"""
         try:
             int_value = int(value)
             
@@ -594,4 +608,9 @@ class TabAnitWarpingReborn(Tool):
     def setAsDish(self, AsDish: bool) -> None:
         self._as_dish = AsDish
         self._preferences.setValue("tabawreborn/create_dish", AsDish)
-        
+
+    def getInputsValid(self) -> bool:
+        return self._inputs_valid
+
+    def setInputsValid(self, InputValid: bool) -> None:
+        self._inputs_valid = InputValid
