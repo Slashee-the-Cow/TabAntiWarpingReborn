@@ -1,9 +1,9 @@
 {
-    "name": "Tab Plus",
-    "author": "5@xes",
-    "version": "1.1.0",
-    "description": "Create Automatique Tab",
-    "i18n-catalog": "tabplus",
-    "api": 7,
-    "supported_sdk_versions": ["7.0.0", "7.1.0", "7.2.0", "7.3.0", "7.4.0", "7.5.0", "7.6.0", "7.7.0", "7.8.0", "7.9.0", "8.0.0"]
+    "name": "Tab Anti-Warping Reborn",
+    "author": "Slashee the Cow",
+    "version": "1.0.0",
+    "description": "A tool that lets you add tabs you can put on the corners (or wherever you want) on your print to help prevent warping. Originally by 5@xes",
+    "i18n-catalog": "tabawreborn",
+    "api": 8,
+    "supported_sdk_versions": ["8.0.0", "8.1.0", "8.2.0", "8.3.0", "8.4.0", "8.5.0", "8.6.0", "8.7.0", "8.8.0", "8.9.0", "8.10.0"]
 }
