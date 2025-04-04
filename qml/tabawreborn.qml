@@ -152,6 +152,8 @@ Item {
     property string tabSize: ""
     property string xyDistance: ""
     property string layerCount: ""
+    property bool asDishProp: false
+
     property bool inputsValid: false
     
     property int localwidth:UM.Theme.getSize("setting_control").width
@@ -164,6 +166,7 @@ Item {
         tabSize = getProperty("TabSize")
         xyDistance = getProperty("XYDistance")
         layerCount = getProperty("LayerCount")
+        asDishProp = getProperty("AsDish")
         Qt.callLater(validateInputs)
     }
 
@@ -256,8 +259,11 @@ Item {
                 id: asDishCheckbox
                 Layout.columnSpan: 2
                 text: catalog.i18nc("@label","Use Dish Shape")
-                checked: getProperty("AsDish")
-                onClicked: setProperty("AsDish", checked)
+                checked: asDishProp
+                onClicked: {
+                    asDishProp = checked
+                    setProperty("AsDish", checked)
+                }
             }
         }
 

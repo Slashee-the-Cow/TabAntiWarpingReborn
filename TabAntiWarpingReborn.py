@@ -13,6 +13,7 @@
 # - Renamed "capsule" to "dish". Not my first choice but the inner construction brick afficionado won't let me call something that isn't flat "plate".
 # - Hopefully stopped the "remove all" button from removing things which aren't tabs. This might cause it to miss things which are tabs. I find this tradeoff acceptable.
 # - Cleaned up A LOT of code. When was the last time someone *cough* dusted this place?
+# - Refactor might be a bit of an understatement. I actually had to use AI to figure out what some of the code was or some of the variable names meant. Hopefully you don't.
 # - Redid the layout for the UI. Hopefully it doesn't look too different. Hopefully it's easier to maintain. That factor may be less important to you.
 # - Made the UI more responsive because there's lots of things neither of us have time for... I assume.
 # - Added copious amounts of input validation to the UI. Sorry if you were having fun trying to make tabs with invalid settings.
@@ -23,8 +24,9 @@
 # - Got rid of a whole bunch of docstrings that took up a lot of space but had very little to say in them. My linter is quite displeased with me.
 # - Tried to improve the linter's mood by type hinting a bunch of stuff. I don't think it's any more impressed.
 # - Put in a bunch of logging so when it inevitably fails hopefully I'll be able to figure out why.
-# - Had to put a Cura version check and add wrapper functions in the UI because in 5.7 they deprecated the way a tool accesses the backend in favour of a different way introduced in 5.7.
-# - Setting for density of auto generated tabs (minimum distance being radius or diameter) for those into Feng Shui and don't want clutter.
+# - Had to put a Cura version check and add wrapper functions in the QML because in 5.7 they deprecated the way a tool accesses the backend in favour of a different way introduced in 5.7.
+# - Choice of density of auto generated tabs (minimum distance being radius or diameter) for those into Feng Shui and don't want clutter.
+# - Added checks to make sure a tab isn't created off the build plate, or too close to edge, since Cura's aim sucks and tries to put tabs way off in the distance sometimes.
 
 import math
 import os.path
@@ -49,6 +51,7 @@ from UM.Message import Message
 from UM.Operations.AddSceneNodeOperation import AddSceneNodeOperation
 from UM.Operations.GroupedOperation import GroupedOperation
 from UM.Operations.RemoveSceneNodeOperation import RemoveSceneNodeOperation
+from UM.Operations.TranslateOperation import TranslateOperation
 from UM.Resources import Resources
 from UM.Scene.Iterator.DepthFirstIterator import DepthFirstIterator
 from UM.Scene.SceneNode import SceneNode
@@ -65,11 +68,13 @@ catalog = i18nCatalog("tabawreborn")
 if catalog.hasTranslationLoaded():
     Logger.log("i", "Tab Anti-Warping Reborn plugin translation loaded")
     
-DEBUG_MODE = True
+DEBUG_MODE = False
 
 def log(level: str, message: str) -> None:
     """Wrapper function for logging messages using Cura's Logger, but with debug mode so as not to spam you."""
     if level == "d" and DEBUG_MODE:
+        Logger.log("d", message)
+    elif level == "dd":
         Logger.log("d", message)
     elif level == "i":
         Logger.log("i", message)
@@ -182,24 +187,28 @@ class TabAnitWarpingReborn(Tool):
                     return
 
             # Create a pass for picking a world-space location from the mouse location
+            #log("d", "PICKING: About to get active camera")
             active_camera = self._controller.getScene().getActiveCamera()
+            #log("d", "PICKING: About to create PickingPass instance")
             picking_pass = PickingPass(active_camera.getViewportWidth(), active_camera.getViewportHeight())
+            #log("d", "PICKING: About to render pass")
             picking_pass.render()
+            #log("d", "PICKING: Just rendered pass.")
 
             log("d", f"event.x = {event.x}, event.y = {event.y}")
             picked_position = picking_pass.getPickedPosition(event.x, event.y)
 
             log("d", f"repr(picked_position) = {repr(picked_position)}")
+            if not self._check_valid_tab_placement(picked_position):
+                return
                             
-            # Add the support_mesh cube at the picked location
-            scene_op = GroupedOperation()
+            # Add the tab at the picked location
             self._createSupportMesh(picked_node, picked_position)
-            scene_op.push()
 
     def _createSupportMesh(self, parent: CuraSceneNode, position: Vector):
         node = CuraSceneNode()
 
-        node.setName("RoundTab")
+        node.setName("Tab")
             
         node.setSelectable(True)
         
@@ -305,13 +314,46 @@ class TabAnitWarpingReborn(Tool):
         # First add node to the scene at the correct position/scale, before parenting, so the support mesh does not get scaled with the parent
         scene_op.addOperation(AddSceneNodeOperation(node, self._controller.getScene().getRoot()))
         scene_op.addOperation(SetParentOperation(node, parent))
+        scene_op.addOperation(TranslateOperation(node, position, set_position = True))
         scene_op.push()
-        node.setPosition(position, CuraSceneNode.TransformSpace.World)
         self._scene_tabs.append(node)
         self.propertyChanged.emit()
         
         CuraApplication.getInstance().getController().getScene().sceneChanged.emit(node)
 
+    def _check_valid_tab_placement(self, picked_position) -> bool:
+        # Check to see if Cura picked a spot off the build plate
+        global_stack = CuraApplication.getInstance().getGlobalContainerStack()
+        machine_width = float(global_stack.getProperty("machine_width", "value"))
+        machine_depth = float(global_stack.getProperty("machine_depth", "value"))
+        log("d", f"machine width = {machine_width}, depth = {machine_depth}")
+        if (picked_position.x < -(machine_width / 2)
+            or picked_position.x > (machine_width / 2)
+            or picked_position.z < -(machine_depth / 2)
+            or picked_position.z > (machine_depth / 2)
+        ):
+            Message(
+                text = catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."),
+                title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
+            return False
+
+        left_edge: float = -(machine_width / 2) + (self._tab_size / 2)
+        right_edge: float = (machine_width / 2) - (self._tab_size / 2)
+        front_edge: float = (-machine_depth / 2) + (self._tab_size / 2)
+        rear_edge: float = (machine_depth / 2) + (self._tab_size / 2)
+        log("d", f"left_edge = {left_edge}, right_edge = {right_edge}, front_edge = {front_edge}, rear_edge = {rear_edge}")
+        if(
+            picked_position.x < left_edge
+            or picked_position.x > right_edge
+            or picked_position.z < front_edge
+            or picked_position.z > rear_edge
+        ):
+            Message(
+                text = catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."),
+                title= catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
+            return False
+        return True
+    
     def _removeSupportMesh(self, node: CuraSceneNode):
         parent = node.getParent()
         if parent == self._controller.getScene().getRoot():
@@ -578,6 +620,13 @@ class TabAnitWarpingReborn(Tool):
                     last_tab_position = new_position
 
         scene_op.push()
+        
+        # Switch to translate tool because you're probably not going to want to create/remoge tabs straight away.
+        self._controller.setActiveTool("TranslateTool")
+        Message(
+            text = catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."),
+            title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn"),
+            lifetime = 15).show()
 
     def getTabSize(self) -> float:
         #log("d", f"getTabSize accessed with self._tab_size = {self._tab_size}")
@@ -634,11 +683,11 @@ class TabAnitWarpingReborn(Tool):
         self._preferences.setValue("tabawreborn/xy_distance", float_value)
 
     def getAsDish(self) -> bool:
-        #log("d", f"getAsDish accessed with self._as_dish = {self._as_dish}")
+        log("d", f"getAsDish accessed with self._as_dish = {self._as_dish} of type {type(self._as_dish)}")
         return self._as_dish
 
     def setAsDish(self, AsDish: bool) -> None:
-        #log("d", f"setAsDish run with {AsDish}")
+        log("d", f"setAsDish run with {AsDish}")
         self._as_dish = AsDish
         self._preferences.setValue("tabawreborn/create_dish", AsDish)
 
