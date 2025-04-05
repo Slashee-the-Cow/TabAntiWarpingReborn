@@ -51,6 +51,7 @@ For that you need to use Cura's built in move tool. Just hold Ctrl and click on 
 - The "capsule" tab type has been renamed to "dish".
 - Renamed everything in the plugin, inside and out. This means you can have this and another version installed side by side if you want.
 - Changed the icon in the toolbar so if you have another version installed you can tell them apart.
+- Implemented my own notification message system since Cura's seems to make the locations you try and pick go wildly off course.
 #### What's gone?
 I did take a couple of features out of the previous incarnation.
 - Removed support for Qt 5 to reduce maintenance workload. This means the minimum Cura version required is now 5.0.
@@ -58,6 +59,7 @@ I did take a couple of features out of the previous incarnation.
 - There were a few post-processing scripts which I don't think Cura could access anyway, and didn't seem particularly useful, so I took those out.
 - There are so many changes the translation files would just completely not work, so I took them out. If you want to translate it, get in touch!
 ## Known Issues?
+- The notification system is ugly and primitive. Cura's built in notifications are pretty and smart. Except they seem to break things.
 - Changes settings related to support so it's not necessarily appropriate for models that need support.
 This is required to make sure the tabs don't become part of the model and are printed before it.
 - The *Remove All Tabs* button might not remove all the tabs any more, depending on what's happened since the tabs were created.
