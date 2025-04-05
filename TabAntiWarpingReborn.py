@@ -112,7 +112,7 @@ class TabAnitWarpingReborn(Tool):
         self._selection_pass = None
         self._application = CuraApplication.getInstance()
         
-        self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount", "InputsValid", "FeedbackMessage", "FeedbackTimeout", "LogMessage")
+        self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount", "InputsValid", "LogMessage")
         
         CuraApplication.getInstance().globalContainerStackChanged.connect(self._updateEnabled)
         
@@ -142,17 +142,6 @@ class TabAnitWarpingReborn(Tool):
         self._as_dish = bool(self._preferences.getValue("tabawreborn/create_dish"))
         self._layer_count = int(self._preferences.getValue("tabawreborn/layer_count"))
         
-        self._feedback_message: str = ""
-        self._feedback_timeout: int = 0
-        self._feedback_timeout_default: int = 15000
-        
-    def _send_feedback(self, message: str, timeout: int = 0) -> None:
-        """Sets the QML properties to display feedback because I can't UM.Message"""
-        if timeout == 0:
-            timeout = self._feedback_timeout_default
-        self._feedback_message = message
-        self._feedback_timeout = timeout
-
     def event(self, event) -> None:
         super().event(event)
         modifiers = QApplication.keyboardModifiers()
@@ -180,7 +169,6 @@ class TabAnitWarpingReborn(Tool):
             log("d", f"picked_node = {picked_node}")
             if not self._inputs_valid:
                 log("d", "Tried to create tab with invalid inputs")
-                self._send_feedback(catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."))
                 #Message(text = catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."),
                 #        title = catalog.i18nc("add_tab_invalid_input_title", "Tab Anti-Warping Reborn")).show()
                 return
@@ -290,7 +278,6 @@ class TabAnitWarpingReborn(Tool):
             #log("d", f"BEFORE: global stack support_type = {support_placement}")
             if support_placement == "buildplate":
                 message_string = catalog.i18nc("@info:support_placement_modified", "Support placement has been set to Everywhere to ensure dish tabs work correctly.")
-                self._send_feedback(message_string)
                 #Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
                 global_stack.setProperty(support_type_key, "value", "everywhere")
                 #log("d", f"AFTER: global stack support_type = {global_stack.getProperty(support_type_key, 'value')}")
@@ -310,7 +297,6 @@ class TabAnitWarpingReborn(Tool):
         log("d", f"BEFORE: global stack {support_xy_key} = {stack_xy_distance}")
         if self._xy_distance != stack_xy_distance:
             message_string = f'{catalog.i18nc("@info:support_xy_modified", "Support X/Y distance has been changed to match tab tool settings of")} {str(self._xy_distance)}mm.'
-            #self._send_feedback(message_string)
             #Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
             global_stack.setProperty(support_xy_key, "value", self._xy_distance)
             log("d", f"AFTER: global stack {support_xy_key} = {global_stack.getProperty(support_xy_key, 'value')}")
@@ -322,7 +308,6 @@ class TabAnitWarpingReborn(Tool):
             #log("d", f"BEFORE: global stack support_infill = {support_infill}")
             if support_infill < 100.0:
                 message_string = catalog.i18nc("@info:support_infill_modified", "Support density has been set to 100% to ensure tabs over 1 layer high are solid.")
-                self._send_feedback(message_string)
                 #Message(text = message_string , title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
                 global_stack.setProperty(support_infill_key, "value", 100.0)
                 #log("d", f"AFTER: global stack support_infill = {extruder_stack.getProperty(support_infill_key, 'value')}")
@@ -350,7 +335,6 @@ class TabAnitWarpingReborn(Tool):
             or picked_position.z < -(machine_depth / 2)
             or picked_position.z > (machine_depth / 2)
         ):
-            self._send_feedback(catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."))
             #Message(
             #    text = catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."),
             #    title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
@@ -367,7 +351,6 @@ class TabAnitWarpingReborn(Tool):
             or picked_position.z < front_edge
             or picked_position.z > rear_edge
         ):
-            self._send_feedback(catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."))
             #Message(
             #    text = catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."),
             #    title= catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
@@ -407,7 +390,6 @@ class TabAnitWarpingReborn(Tool):
                         plugin_enabled = True #Enable plugin if support meshes exist.
                         if not global_container_stack.getProperty("support_mesh", "enabled"):
                             global_container_stack.setProperty("support_mesh", "enabled", True)
-                            self._send_feedback(catalog.i18nc("support_reenable", "Support was re-enabled because tabs are present in the scene."))
                             #Message(text = catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), title = catalog.i18nc("@info:title", "Tab Anti-Warping Reborn")).show() #Show toast message.
                         break
 
@@ -560,7 +542,6 @@ class TabAnitWarpingReborn(Tool):
             self._scene_tabs.clear()
             self._any_as_dish = False
             self.propertyChanged.emit()
-            self._send_feedback(catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."))
             #Message(text = catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."), title=catalog.i18nc("remove_all_title", "Tab Anti-Warping Reborn"))
  
     # Source code from MeshTools Plugin 
@@ -717,30 +698,6 @@ class TabAnitWarpingReborn(Tool):
     def setInputsValid(self, InputValid: bool) -> None:
         #log("d", f"setInputsValid run with {InputValid}")
         self._inputs_valid = InputValid
-        
-    def getFeedbackMessage(self) -> str:
-        log("d", f"getFeedbackMessage accessed with self._feedback_message = {self._feedback_message}")
-        return self._feedback_message
-  
-    def setFeedbackMessage(self, FeedbackMessage: str) -> None:
-        log("d", f"setFeedbackMessage run with {FeedbackMessage}")
-        self._feedback_message = FeedbackMessage
-        
-    def getFeedbackTimeout(self) -> int:
-        log("d", f"getFeedbackMessage accessed with self._feedback_message = {self._feedback_message}")
-        return self._feedback_timeout
-  
-    def setFeedbackTimeout(self, FeedbackTimeout: int) -> None:
-        # I'm not expecting this to be set from the QML side but it never hurts to be ready.
-
-        log("d", f"setFeedbackTimeout run with {FeedbackTimeout}")
-        try:
-            int_value = int(FeedbackTimeout)
-        except ValueError:
-            #log("e", "setFeedbackTimeout was passed something that could not be cast to a int")
-            return
- 
-        self._feedback_timeout = int_value
 
     def getLogMessage(self) -> str:
         """ This is just here so I can use the setter to log stuff. """
