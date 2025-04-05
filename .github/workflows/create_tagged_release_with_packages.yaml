@@ -20,6 +20,7 @@ jobs:
       - name: Copy files needed for the build
         working-directory: repo
         run: |
+          cp -r images ../build/
           cp -r qml ../build/
           cp __init__.py ../build/
           cp LICENSE ../build/

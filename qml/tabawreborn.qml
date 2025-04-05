@@ -6,6 +6,8 @@
 //   "XYDistance"   : X/Y distance from model in mm
 //   "AsDish"       : Use dish shape
 //   "LayerCount"   : Number of layers for tab
+//   "FeedbackText" : Message to show user (in place of toast)
+//   "FeedbackTimer": Timeout for feedback message
 //
 //-----------------------------------------------------------------------------
 
@@ -153,9 +155,12 @@ Item {
     property string xyDistance: ""
     property string layerCount: ""
     property bool asDishProp: false
-
-    property bool inputsValid: false
     
+    property bool inputsValid: false
+
+    property string feedbackMessage: ""
+    property int feedbackTimeout: 0
+
     property int localwidth:UM.Theme.getSize("setting_control").width
 
     property string errorMessage: ""
@@ -168,139 +173,210 @@ Item {
         layerCount = getProperty("LayerCount")
         asDishProp = getProperty("AsDish")
         Qt.callLater(validateInputs)
+        if(isVersion57OrGreater()) {
+            UM.Controller.propertiesChanged.connect(handlePropertiesChanged);
+        } else {
+            UM.ActiveTool.propertiesChanged.connect(handlePropertiesChanged);
+        }
+        updateFeedback(); //Initialize the view with the current value.
+        updateTimeout(); //Initialize the view with the current value.
     }
 
-    ColumnLayout {
-        id: mainColumn
+    function handlePropertiesChanged() {
+        let feedbackMessageChange = isVersion57OrGreater() ? UM.Controller.properties.getValue("FeedbackMessage") : UM.ActiveTool.properties.getValue("FeedbackMessage");
+        let feedbackTimeoutChange = isVersion57OrGreater() ? UM.Controller.properties.getValue("FeedbackTimeout") : UM.ActiveTool.properties.getValue("FeedbackTimeout");
+        let functionRunMessage = "handlePropertiesChanged called"
+        if (feedbackMessage !== "") {
+            Qt.callLater(function() { updateFeedback(feedbackMessage); }); // Delay message display
+        }
+        if (feedbackTimeout !== 0) {
+            Qt.callLater(function() { updateTimeout(feedbackTimeout); }); // Delay timeout reset
+        }
+    }
+
+    function updateFeedback() {
+        feedbackLabel.text = getProperty("FeedbackMessage");
+        setProperty("LogMessage", "updateFeedback running with getProperty('FeedbackMessage') " + getProperty("FeedbackMessage"))
+        setProperty("FeedbackMessage", "")
+        setProperty("LogMessage", "updateFeedback set FeedbackMessage to " + getProperty("FeedbackMessage"))
+        if (feedbackTimeout > 0) {
+            feedbackTimer.interval = feedbackTimeout;
+            feedbackTimer.restart();
+        }
+    }
+
+    function updateTimeout() {
+        feedbackTimeout = getProperty("FeedbackTimeout")
+        setProperty("LogMessage", "updateTimeout running with getProperty('FeedbackTimeout') " + getProperty("FeedbackTimeout"))
+        setProperty("FeedbackTimeout", 0)
+        setProperty("LogMessage", "updateTimeout set FeedbackTimeout to " + getProperty("FeedbackTimeout"))
+        if (feedbackTimeout > 0 && feedbackLabel.text !== "") {
+            feedbackTimer.interval = feedbackTimeout;
+            feedbackTimer.restart();
+        }
+    }
+
+    RowLayout{
+        id: layoutBase
         anchors.left: parent.left
         anchors.top: parent.top
-        UM.Label {
-            Layout.fillWidth: true
-            Layout.maximumWidth: 175
-            visible: tabRebornPanel.errorMessage != ""
-            id: error_text
-            text: tabRebornPanel.errorMessage
-            color: UM.Theme.getColor("error")
-            wrapMode: TextInput.Wrap
-        }
-    
-        GridLayout {
-            id: controlLayout
 
-            Layout.fillWidth: true
-            Layout.alignment: Qt.AlignTop
-
-            columns: 2
-            columnSpacing: UM.Theme.getSize("default_margin").width
-            rowSpacing: UM.Theme.getSize("default_margin").height
-
+        ColumnLayout {
+            id: mainColumn
+            //anchors.left: parent.left
+            //anchors.top: parent.top
             UM.Label {
-                text: catalog.i18nc("@label", "Size")
+                Layout.fillWidth: true
+                Layout.maximumWidth: 175
+                visible: tabRebornPanel.errorMessage != ""
+                id: error_text
+                text: tabRebornPanel.errorMessage
+                color: UM.Theme.getColor("error")
+                wrapMode: TextInput.Wrap
             }
+        
+            GridLayout {
+                id: controlLayout
 
-            UM.TextFieldWithUnit {
-                id: sizeTextField
-                Layout.minimumWidth: textFieldMinWidth
-                height: UM.Theme.getSize("setting_control").height
-                unit: "mm"
-                text: tabSize
-                validator: DoubleValidator {
-                    decimals: 2
-                    bottom: 0.1
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignTop
+
+                columns: 2
+                columnSpacing: UM.Theme.getSize("default_margin").width
+                rowSpacing: UM.Theme.getSize("default_margin").height
+
+                UM.Label {
+                    text: catalog.i18nc("@label", "Size")
                 }
 
-                onTextChanged: {
-                    tabSize = text
-                    Qt.callLater(validateInputs)
+                UM.TextFieldWithUnit {
+                    id: sizeTextField
+                    Layout.minimumWidth: textFieldMinWidth
+                    height: UM.Theme.getSize("setting_control").height
+                    unit: "mm"
+                    text: tabSize
+                    validator: DoubleValidator {
+                        decimals: 2
+                        bottom: 0.1
+                    }
+
+                    onTextChanged: {
+                        tabSize = text
+                        Qt.callLater(validateInputs)
+                    }
+                }
+                
+                UM.Label {
+                    text: catalog.i18nc("@label", "X/Y Distance")
+                }
+
+                UM.TextFieldWithUnit {
+                    id: xyDistanceTextField
+                    Layout.minimumWidth: textFieldMinWidth
+                    height: UM.Theme.getSize("setting_control").height
+                    unit: "mm"
+                    text: xyDistance
+                    validator: DoubleValidator {
+                        top: 1
+                        bottom: 0.01
+                        decimals: 2
+                    }
+                    onTextChanged: {
+                        xyDistance = text
+                        Qt.callLater(validateInputs)
+                    }
+                }
+
+                UM.Label {
+                    text: catalog.i18nc("@label", "Number of layers")
+                }
+
+                UM.TextFieldWithUnit{
+                    id: layerCountTextField
+                    Layout.minimumWidth: textFieldMinWidth
+                    height: UM.Theme.getSize("setting_control").height
+                    text: layerCount
+                    validator: IntValidator {
+                        bottom: 1
+                        top: 100
+                    }
+                    onTextChanged: {
+                        layerCount = text
+                        Qt.callLater(validateInputs)
+                    }
+                }
+
+                UM.CheckBox {
+                    id: asDishCheckbox
+                    Layout.columnSpan: 2
+                    text: catalog.i18nc("@label","Use Dish Shape")
+                    checked: asDishProp
+                    onClicked: {
+                        asDishProp = checked
+                        setProperty("AsDish", checked)
+                    }
                 }
             }
+
+            Cura.TertiaryButton{
+                id: removeAllButton
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
+                spacing: UM.Theme.getSize("default_margin").height
+                width: UM.Theme.getSize("setting_control").width
+                height: UM.Theme.getSize("setting_control").height    
+                text: catalog.i18nc("@label", "Remove All Tabs")
+                onClicked: triggerAction("removeAllSupportMesh")
+            }
+            Cura.SecondaryButton{
+                id: addAllButton
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
+                spacing: UM.Theme.getSize("default_margin").height
+                width: UM.Theme.getSize("setting_control").width
+                height: UM.Theme.getSize("setting_control").height    
+                text: catalog.i18nc("@label", "Add Automatically")
+                //onClicked: triggerAction("addAutoSupportMesh")
+                onClicked: automaticAddDensity.open()
+                Menu{
+                    id: automaticAddDensity
+                    MenuItem{
+                        text: catalog.i18nc("density_menu", "More tabs (may overlap)")
+                        onClicked: {
+                            validateInputs()
+                            triggerActionWithData("addAutoSupportMesh", {dense: true})
+                        }
+                    }
+                    MenuItem{
+                        text: catalog.i18nc("density_menu", "Less tabs (may miss points)")
+                        onClicked: {
+                            validateInputs()
+                            triggerActionWithData("addAutoSupportMesh", {dense: false})
+                        }
+                    }
+                }
+            }
+        }
+
+        ColumnLayout {
+            id: feedbackColumn
             
             UM.Label {
-                text: catalog.i18nc("@label", "X/Y Distance")
+                id: feedbackLabel
+                font.weight: Font.Bold
+                font.pointSize: 12
+                text: ""
+                visible: text !== ""
+                wrapMode: Text.Wrap
+                Layout.preferredWidth: 200
             }
 
-            UM.TextFieldWithUnit {
-                id: xyDistanceTextField
-                Layout.minimumWidth: textFieldMinWidth
-                height: UM.Theme.getSize("setting_control").height
-                unit: "mm"
-                text: xyDistance
-                validator: DoubleValidator {
-                    top: 1
-                    bottom: 0.01
-                    decimals: 2
-                }
-                onTextChanged: {
-                    xyDistance = text
-                    Qt.callLater(validateInputs)
-                }
-            }
-
-            UM.Label {
-                text: catalog.i18nc("@label", "Number of layers")
-            }
-
-            UM.TextFieldWithUnit{
-                id: layerCountTextField
-                Layout.minimumWidth: textFieldMinWidth
-                height: UM.Theme.getSize("setting_control").height
-                text: layerCount
-                validator: IntValidator {
-                    bottom: 1
-                    top: 100
-                }
-                onTextChanged: {
-                    layerCount = text
-                    Qt.callLater(validateInputs)
-                }
-            }
-
-            UM.CheckBox {
-                id: asDishCheckbox
-                Layout.columnSpan: 2
-                text: catalog.i18nc("@label","Use Dish Shape")
-                checked: asDishProp
-                onClicked: {
-                    asDishProp = checked
-                    setProperty("AsDish", checked)
-                }
-            }
-        }
-
-        Cura.SecondaryButton{
-            id: removeAllButton
-            Layout.fillWidth: true
-            Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
-            spacing: UM.Theme.getSize("default_margin").height
-            width: UM.Theme.getSize("setting_control").width
-            height: UM.Theme.getSize("setting_control").height    
-            text: catalog.i18nc("@label", "Remove All Tabs")
-            onClicked: triggerAction("removeAllSupportMesh")
-        }
-
-        Cura.SecondaryButton{
-            id: addAllButton
-            Layout.fillWidth: true
-            Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
-            spacing: UM.Theme.getSize("default_margin").height
-            width: UM.Theme.getSize("setting_control").width
-            height: UM.Theme.getSize("setting_control").height    
-            text: catalog.i18nc("@label", "Add Automatically")
-            //onClicked: triggerAction("addAutoSupportMesh")
-            onClicked: automaticAddDensity.open()
-            Menu{
-                id: automaticAddDensity
-                MenuItem{
-                    text: catalog.i18nc("density_menu", "More tabs (may overlap)")
-                    onClicked: {
-                        triggerActionWithData("addAutoSupportMesh", {dense: true})
-                    }
-                }
-                MenuItem{
-                    text: catalog.i18nc("density_menu", "Less tabs (may miss points)")
-                    onClicked: {
-                        triggerActionWithData("addAutoSupportMesh", {dense: false})
-                    }
+            Timer {
+                id: feedbackTimer
+                interval: 0 // Will be set from Python
+                running: false
+                onTriggered: {
+                    feedbackLabel.text = "";
                 }
             }
         }
