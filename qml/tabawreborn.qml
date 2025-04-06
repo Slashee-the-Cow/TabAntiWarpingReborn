@@ -6,6 +6,8 @@
 //   "XYDistance"   : X/Y distance from model in mm
 //   "AsDish"       : Use dish shape
 //   "LayerCount"   : Number of layers for tab
+//   "FeedbackText" : Message to show user (in place of toast)
+//   "FeedbackTimer": Timeout for feedback message
 //
 //-----------------------------------------------------------------------------
 
@@ -153,9 +155,9 @@ Item {
     property string xyDistance: ""
     property string layerCount: ""
     property bool asDishProp: false
-
-    property bool inputsValid: false
     
+    property bool inputsValid: false
+
     property int localwidth:UM.Theme.getSize("setting_control").width
 
     property string errorMessage: ""
@@ -267,7 +269,7 @@ Item {
             }
         }
 
-        Cura.SecondaryButton{
+        Cura.TertiaryButton{
             id: removeAllButton
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
@@ -277,7 +279,6 @@ Item {
             text: catalog.i18nc("@label", "Remove All Tabs")
             onClicked: triggerAction("removeAllSupportMesh")
         }
-
         Cura.SecondaryButton{
             id: addAllButton
             Layout.fillWidth: true
@@ -293,12 +294,14 @@ Item {
                 MenuItem{
                     text: catalog.i18nc("density_menu", "More tabs (may overlap)")
                     onClicked: {
+                        validateInputs()
                         triggerActionWithData("addAutoSupportMesh", {dense: true})
                     }
                 }
                 MenuItem{
                     text: catalog.i18nc("density_menu", "Less tabs (may miss points)")
                     onClicked: {
+                        validateInputs()
                         triggerActionWithData("addAutoSupportMesh", {dense: false})
                     }
                 }

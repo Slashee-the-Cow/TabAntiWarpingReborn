@@ -27,9 +27,13 @@
 # - Had to put a Cura version check and add wrapper functions in the QML because in 5.7 they deprecated the way a tool accesses the backend in favour of a different way introduced in 5.7.
 # - Choice of density of auto generated tabs (minimum distance being radius or diameter) for those into Feng Shui and don't want clutter.
 # - Added checks to make sure a tab isn't created off the build plate, or too close to edge, since Cura's aim sucks and tries to put tabs way off in the distance sometimes.
+#--------------------------------------------------------------------------------------------
+# There seems to be a bug with UM.Message.Message that makes PickingPass go wildly off course if there's one on screen.
+# Hence why I rolled my own. It's much inferior, except that it doesn't seem to break things.
 
 import math
 import os.path
+import time
 from typing import List
 
 import numpy
@@ -59,6 +63,8 @@ from UM.Scene.Selection import Selection
 from UM.Settings.SettingInstance import SettingInstance
 from UM.Tool import Tool
 
+from .FeedbackDisplay import FeedbackDisplay
+
 Resources.addSearchPath(
     os.path.join(os.path.abspath(os.path.dirname(__file__)))
 )  # Plugin translation file import
@@ -67,7 +73,7 @@ catalog = i18nCatalog("tabawreborn")
 
 if catalog.hasTranslationLoaded():
     Logger.log("i", "Tab Anti-Warping Reborn plugin translation loaded")
-    
+
 DEBUG_MODE = False
 
 def log(level: str, message: str) -> None:
@@ -108,6 +114,8 @@ class TabAnitWarpingReborn(Tool):
         self._selection_pass = None
         self._application = CuraApplication.getInstance()
         
+        self._feedback_display = FeedbackDisplay()
+        
         self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount", "InputsValid", "LogMessage")
         
         CuraApplication.getInstance().globalContainerStackChanged.connect(self._updateEnabled)
@@ -137,8 +145,8 @@ class TabAnitWarpingReborn(Tool):
         self._xy_distance = float(self._preferences.getValue("tabawreborn/xy_distance"))
         self._as_dish = bool(self._preferences.getValue("tabawreborn/create_dish"))
         self._layer_count = int(self._preferences.getValue("tabawreborn/layer_count"))
-
-    def event(self, event):
+        
+    def event(self, event) -> None:
         super().event(event)
         modifiers = QApplication.keyboardModifiers()
         ctrl_is_active = modifiers & Qt.KeyboardModifier.ControlModifier
@@ -147,6 +155,8 @@ class TabAnitWarpingReborn(Tool):
             if ctrl_is_active:
                 self._controller.setActiveTool("TranslateTool")
                 return
+            
+            #self._feedback_display.show_feedback("You clicked!")
 
             if self._skip_press:
                 # The selection was previously cleared, do not add/remove an support mesh but
@@ -164,14 +174,16 @@ class TabAnitWarpingReborn(Tool):
                 return
             log("d", f"picked_node = {picked_node}")
             if not self._inputs_valid:
-                Message(text = catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."),
-                        title = catalog.i18nc("add_tab_invalid_input_title", "Tab Anti-Warping Reborn")).show()
+                log("d", "Tried to create tab with invalid inputs")
+                self._feedback_display.show_feedback(catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."), 10000)
+                #Message(text = catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."),
+                #        title = catalog.i18nc("add_tab_invalid_input_title", "Tab Anti-Warping Reborn")).show()
                 return
             
             node_world_transform = picked_node.getWorldTransformation()
             if node_world_transform:
                 node_position = node_world_transform.getTranslation()
-                log("d", f"picked_node world position = {node_position}")
+                log("dd", f"picked_node world position = {node_position}")
             else:
                 log("d", "picked_node has no world transformation")
 
@@ -185,20 +197,22 @@ class TabAnitWarpingReborn(Tool):
                 if node_stack.getProperty("anti_overhang_mesh", "value") or node_stack.getProperty("infill_mesh", "value") or node_stack.getProperty("support_mesh", "value"):
                     # Only "normal" meshes can have support_mesh added to them
                     return
+            #Message("You just added a tab!", title="Grats!").show()
 
             # Create a pass for picking a world-space location from the mouse location
             #log("d", "PICKING: About to get active camera")
             active_camera = self._controller.getScene().getActiveCamera()
+            #log("d", f"All about active_camera: -- Parent: {active_camera.getParent()} -- Mirror: {active_camera.getMirror()} -- BoundingBoxMesh: {active_camera.getBoundingBoxMesh()} -- Decorators: {active_camera.getDecorators()} -- Name: {active_camera.getName()} -- ID: {active_camera.getId()} -- Depth: {active_camera.getDepth()} -- isVisible: {active_camera.isVisible()} -- MeshData: {active_camera.getMeshData()} -- MeshDataTransformed: {active_camera.getMeshDataTransformed()} -- MeshDataTransformed.toString(): {active_camera.getMeshDataTransformed().toString()} -- MeshDataTransformedVertices: {active_camera.getMeshDataTransformedVertices()} -- MeshDataTransformedNormals: {active_camera.getMeshDataTransformedNormals()} -- Children: {active_camera.getChildren()} -- AllChildren: {active_camera.getAllChildren()} -- CachedNormalMatrix: {active_camera.getCachedNormalMatrix()} -- WorldTransformation: {active_camera.getWorldTransformation()} -- LocalTransform: {active_camera.getLocalTransformation()} -- Orientation: {active_camera.getOrientation()} -- WorldOrientation: {active_camera.getWorldOrientation()} -- Scale: {active_camera.getScale()} -- WorldScale: {active_camera.getWorldScale()} -- Position: {active_camera.getPosition()} -- WorldPosition: {active_camera.getWorldPosition()} -- isEnabled: {active_camera.isEnabled()} -- isSelectable: {active_camera.isSelectable()} -- BoundingBox: {active_camera.getBoundingBox()} -- Shear: {active_camera.getShear()} -- AutoAdjustViewport: {active_camera.getAutoAdjustViewPort()} -- DefaultZoomFactor: {active_camera.getDefaultZoomFactor()} -- ZoomFactor: {active_camera.getZoomFactor()} -- ProjectionMatrix: {active_camera.getProjectionMatrix()} -- ViewportWidth: {active_camera.getViewportWidth()} -- ViewportHeight: {active_camera.getViewportHeight()} -- ViewProjectionMatrix: {active_camera.getViewProjectionMatrix()} -- WindowSize: {active_camera.getWindowSize()} -- InverseWorldTransformation: {active_camera.getInverseWorldTransformation()} -- CameraLightPosition: {active_camera.getCameraLightPosition()} -- isPerspective: {active_camera.isPerspective()} -- ")
             #log("d", "PICKING: About to create PickingPass instance")
             picking_pass = PickingPass(active_camera.getViewportWidth(), active_camera.getViewportHeight())
             #log("d", "PICKING: About to render pass")
             picking_pass.render()
             #log("d", "PICKING: Just rendered pass.")
 
-            log("d", f"event.x = {event.x}, event.y = {event.y}")
+            log("dd", f"event.x = {event.x}, event.y = {event.y}")
             picked_position = picking_pass.getPickedPosition(event.x, event.y)
 
-            log("d", f"repr(picked_position) = {repr(picked_position)}")
+            log("dd", f"repr(picked_position) = {repr(picked_position)}")
             if not self._check_valid_tab_placement(picked_position):
                 return
                             
@@ -214,13 +228,10 @@ class TabAnitWarpingReborn(Tool):
         
         # long=Support Height
         tab_start_y=position.y
-        
-        # This function can be triggered in the middle of a machine change, so do not proceed if the machine change
-        # has not done yet.
+
         global_stack = CuraApplication.getInstance().getGlobalContainerStack()
-        #extruder = global_container_stack.extruderList[int(_id_ex)] 
+
         extruder_stack = CuraApplication.getInstance().getExtruderManager().getActiveExtruderStacks()[0]
-        #Logger.log('d', "Info Extruder_count --> " + str(extruder_count))
         
         # Reasonable defaults for the "standard" 0.4mm nozzle
         layer_height_0: float = 0.3
@@ -244,8 +255,7 @@ class TabAnitWarpingReborn(Tool):
         else:
             # Cylinder creation Diameter , Increment angle 10°, length, layer_height_0*1.2
             mesh = self._createCylinder(self._tab_size, 10, tab_start_y, tab_total_height)
-        
-        
+
         node.setMeshData(mesh.build())
 
         active_build_plate = CuraApplication.getInstance().getMultiBuildPlateModel().activeBuildPlate
@@ -272,12 +282,13 @@ class TabAnitWarpingReborn(Tool):
         if self._any_as_dish or self._as_dish:
             support_type_key="support_type"
             support_placement = global_stack.getProperty(support_type_key, "value")
-            log("d", f"BEFORE: global stack support_type = {support_placement}")
+            #log("d", f"BEFORE: global stack support_type = {support_placement}")
             if support_placement == "buildplate":
                 message_string = catalog.i18nc("@info:support_placement_modified", "Support placement has been set to Everywhere to ensure dish tabs work correctly.")
-                Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
-                global_stack.setProperty(support_type_key, "value", 'everywhere')
-                log("d", f"AFTER: global stack support_type = {global_stack.getProperty(support_type_key, 'value')}")
+                self._feedback_display.show_feedback(message_string, 10000)
+                #Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
+                global_stack.setProperty(support_type_key, "value", "everywhere")
+                #log("d", f"AFTER: global stack support_type = {global_stack.getProperty(support_type_key, 'value')}")
                
         # Define support_xy_distance
         definition = stack.getSettingDefinition("support_xy_distance")
@@ -291,23 +302,25 @@ class TabAnitWarpingReborn(Tool):
 
         support_xy_key="support_xy_distance"
         stack_xy_distance = global_stack.getProperty(support_xy_key, "value")
-        log("d", f"BEFORE: global stack xy_distance = {stack_xy_distance}")
+        log("d", f"BEFORE: global stack {support_xy_key} = {stack_xy_distance}")
         if self._xy_distance != stack_xy_distance:
             message_string = f'{catalog.i18nc("@info:support_xy_modified", "Support X/Y distance has been changed to match tab tool settings of")} {str(self._xy_distance)}mm.'
-            Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
+            self._feedback_display.show_feedback(message_string, 10000)
+            #Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
             global_stack.setProperty(support_xy_key, "value", self._xy_distance)
-            log("d", f"AFTER: global stack support_type = {global_stack.getProperty(support_xy_key, 'value')}")
+            log("d", f"AFTER: global stack {support_xy_key} = {global_stack.getProperty(support_xy_key, 'value')}")
 
         # Support infill (more than 1 layer needs to be solid)
         if self._layer_count > 1:
             support_infill_key="support_infill_rate"
             support_infill = float(extruder_stack.getProperty(support_infill_key, "value"))
-            log("d", f"BEFORE: global stack support_infill = {support_infill}")
+            #log("d", f"BEFORE: global stack support_infill = {support_infill}")
             if support_infill < 100.0:
                 message_string = catalog.i18nc("@info:support_infill_modified", "Support density has been set to 100% to ensure tabs over 1 layer high are solid.")
-                Message(text = message_string , title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
+                self._feedback_display.show_feedback(message_string, 10000)
+                #Message(text = message_string , title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
                 global_stack.setProperty(support_infill_key, "value", 100.0)
-                log("d", f"AFTER: global stack support_infill = {extruder_stack.getProperty(support_infill_key, 'value')}")
+                #log("d", f"AFTER: global stack support_infill = {extruder_stack.getProperty(support_infill_key, 'value')}")
                 
         
         scene_op = GroupedOperation()
@@ -332,9 +345,10 @@ class TabAnitWarpingReborn(Tool):
             or picked_position.z < -(machine_depth / 2)
             or picked_position.z > (machine_depth / 2)
         ):
-            Message(
-                text = catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."),
-                title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
+            self._feedback_display.show_feedback(catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."), 7500)
+            #Message(
+            #    text = catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."),
+            #    title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
             return False
 
         left_edge: float = -(machine_width / 2) + (self._tab_size / 2)
@@ -348,10 +362,13 @@ class TabAnitWarpingReborn(Tool):
             or picked_position.z < front_edge
             or picked_position.z > rear_edge
         ):
-            Message(
-                text = catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."),
-                title= catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
+            self._feedback_display.show_feedback(catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."), 7500)
+            #Message(
+            #    text = catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."),
+            #    title= catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
             return False
+        
+        #TODO: Use SceneNode.collidesWithBbox()
         return True
     
     def _removeSupportMesh(self, node: CuraSceneNode):
@@ -385,7 +402,8 @@ class TabAnitWarpingReborn(Tool):
                         plugin_enabled = True #Enable plugin if support meshes exist.
                         if not global_container_stack.getProperty("support_mesh", "enabled"):
                             global_container_stack.setProperty("support_mesh", "enabled", True)
-                            Message(text = catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), title = catalog.i18nc("@info:title", "Tab Anti-Warping Reborn")).show() #Show toast message.
+                            self._feedback_display.show_feedback(catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), 5000)
+                            #Message(text = catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), title = catalog.i18nc("@info:title", "Tab Anti-Warping Reborn")).show() #Show toast message.
                         break
 
             else:
@@ -427,9 +445,9 @@ class TabAnitWarpingReborn(Tool):
         segment_radians = math.radians(segments)
 
         cap_radius=math.tan(math.radians(45))*(top_height * 3)+base_radius
-        # Top inside radius 
+        # Top inside radius
         inner_radius_cap=cap_radius-(1.8*line_width)
-        # Top radius 
+        # Top radius
         inner_radius_base=base_radius-(1.8*line_width)
             
         vertices = []
@@ -467,13 +485,12 @@ class TabAnitWarpingReborn(Tool):
             vertices.append([0, max_y, 0])
             vertices.append([inner_radius_base*math.cos((i+1)*segment_radians), max_y, inner_radius_base*math.sin((i+1)*segment_radians)])
             vertices.append([inner_radius_base*math.cos(i*segment_radians), max_y, inner_radius_base*math.sin(i*segment_radians)])
-            
-            #Bottom 
+
+            #Bottom
             vertices.append([0, min_y, 0])
             vertices.append([base_radius*math.cos(i*segment_radians), min_y, base_radius*math.sin(i*segment_radians)])
             vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)]) 
-            
-            
+
         mesh.setVertices(numpy.asarray(vertices, dtype=numpy.float32))
 
         indices = []
@@ -485,7 +502,7 @@ class TabAnitWarpingReborn(Tool):
 
         mesh.calculateNormals()
         return mesh
-        
+
     # Cylinder creation
     def _createCylinder(self, base_diameter: float, segments: int, start_y: float, cylinder_height: float):
         mesh = MeshBuilder()
@@ -538,7 +555,8 @@ class TabAnitWarpingReborn(Tool):
             self._scene_tabs.clear()
             self._any_as_dish = False
             self.propertyChanged.emit()
-            Message(text = catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."), title=catalog.i18nc("remove_all_title", "Tab Anti-Warping Reborn"))
+            self._feedback_display.show_feedback(catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."))
+            #Message(text = catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."), title=catalog.i18nc("remove_all_title", "Tab Anti-Warping Reborn"))
  
     # Source code from MeshTools Plugin 
     # Copyright (c) 2020 Aldo Hoeben / fieldOfView
@@ -574,11 +592,11 @@ class TabAnitWarpingReborn(Tool):
                 log("d", f"addAutoSupportMesh got QVariant {variant} which isn't a dict")
         else:
             log("d", f"addAutoSupportMesh did not get a QJSValue passed to it. It got {data}")
+        
         nodes_list = self._getAllSelectedNodes()
         if not nodes_list:
             nodes_list = DepthFirstIterator(self._application.getController().getScene().getRoot())
 
-        scene_op = GroupedOperation()
         for node in nodes_list:
             if not node.callDecoration("isSliceable"):
                 continue
@@ -618,15 +636,14 @@ class TabAnitWarpingReborn(Tool):
                 if difference_length >= minimum_distance or first_to_last_length >= minimum_distance:
                     self._createSupportMesh(node, new_position)
                     last_tab_position = new_position
-
-        scene_op.push()
         
         # Switch to translate tool because you're probably not going to want to create/remoge tabs straight away.
         self._controller.setActiveTool("TranslateTool")
-        Message(
-            text = catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."),
-            title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn"),
-            lifetime = 15).show()
+        self._feedback_display.show_feedback(catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."), 5000)
+        #Message(
+        #    text = catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."),
+        #    title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn"),
+        #    lifetime = 15).show()
 
     def getTabSize(self) -> float:
         #log("d", f"getTabSize accessed with self._tab_size = {self._tab_size}")
@@ -642,7 +659,7 @@ class TabAnitWarpingReborn(Tool):
 
         if float_value <= 0:
             return
-        #Logger.log('d', 's_value : ' + str(s_value))        
+
         self._tab_size = float_value
         self._preferences.setValue("tabawreborn/tab_size", float_value)
  
@@ -661,8 +678,7 @@ class TabAnitWarpingReborn(Tool):
  
         if int_value < 1:
             return
-        
-        #Logger.log('d', 'i_value : ' + str(i_value))        
+
         self._layer_count = int_value
         self._preferences.setValue("tabawreborn/layer_count", int_value)
         
@@ -677,17 +693,16 @@ class TabAnitWarpingReborn(Tool):
         except ValueError:
             #log("e", "setXYDistance was passed something that could not be cast to a float")
             return
-        
-        #Logger.log('d', 's_value : ' + str(s_value)) 
+
         self._xy_distance = float_value
         self._preferences.setValue("tabawreborn/xy_distance", float_value)
 
     def getAsDish(self) -> bool:
-        log("d", f"getAsDish accessed with self._as_dish = {self._as_dish} of type {type(self._as_dish)}")
+        #log("d", f"getAsDish accessed with self._as_dish = {self._as_dish} of type {type(self._as_dish)}")
         return self._as_dish
 
     def setAsDish(self, AsDish: bool) -> None:
-        log("d", f"setAsDish run with {AsDish}")
+        #log("d", f"setAsDish run with {AsDish}")
         self._as_dish = AsDish
         self._preferences.setValue("tabawreborn/create_dish", AsDish)
 
@@ -702,6 +717,6 @@ class TabAnitWarpingReborn(Tool):
     def getLogMessage(self) -> str:
         """ This is just here so I can use the setter to log stuff. """
         return ""
-    
+
     def setLogMessage(self, message: str) -> None:
         log("d", f"TabAntiWarpingReborn QML Log: {message}")
