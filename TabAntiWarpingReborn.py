@@ -156,7 +156,7 @@ class TabAnitWarpingReborn(Tool):
                 self._controller.setActiveTool("TranslateTool")
                 return
             
-            #self._feedback_display.show_feedback("You clicked!")
+            #Message(text = "You clicked!", title = "Grats!").show()
 
             if self._skip_press:
                 # The selection was previously cleared, do not add/remove an support mesh but
