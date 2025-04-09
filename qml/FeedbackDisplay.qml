@@ -9,7 +9,7 @@ UM.Dialog {
     minimumWidth: 300
     width: 300
     maximumWidth: 500
-    height: childrenRect.height
+    height: 100
     maximumHeight: 200
     x: 200
     y: 300
