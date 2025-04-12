@@ -2,12 +2,11 @@
 // Tab+ Anti-Warping Copyright (c) 2022 5@xes
 // Reborn version copyright Slashee the Cow 2025-
 // proterties values
-//   "TabSize"      : Tab Size in mm
-//   "XYDistance"   : X/Y distance from model in mm
-//   "AsDish"       : Use dish shape
-//   "LayerCount"   : Number of layers for tab
-//   "FeedbackText" : Message to show user (in place of toast)
-//   "FeedbackTimer": Timeout for feedback message
+//   "TabSize"       : Tab Size in mm
+//   "XYDistance"    : X/Y distance from model in mm
+//   "AsDish"        : Use dish shape
+//   "LayerCount"    : Number of layers for tab
+//   "Notifications" : DIY toast display.
 //
 //-----------------------------------------------------------------------------
 
@@ -156,7 +155,6 @@ Item {
     property string layerCount: ""
     property bool asDishProp: false
     property string notifications: getProperty("Notifications")
-    property bool hideToastsProp: false
 
     property bool inputsValid: false
 
@@ -171,7 +169,6 @@ Item {
         xyDistance = getProperty("XYDistance")
         layerCount = getProperty("LayerCount")
         asDishProp = getProperty("AsDish")
-        hideToastsProp = getProperty("HideToasts")
         Qt.callLater(validateInputs)
     }
     RowLayout {
@@ -311,50 +308,6 @@ Item {
                             triggerActionWithData("addAutoSupportMesh", {dense: false})
                         }
                     }
-                }
-            }
-
-            Cura.TertiaryButton{
-                id: testFeedbackDisplayButton
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
-                spacing: UM.Theme.getSize("default_margin").height
-                width: UM.Theme.getSize("setting_control").width
-                height: UM.Theme.getSize("setting_control").height
-                text: catalog.i18nc("@label", "Test Feedback Display")
-                onClicked: triggerAction("testFeedbackDisplay")
-            }
-
-            Cura.TertiaryButton{
-                id: testNotificationButton
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
-                spacing: UM.Theme.getSize("default_margin").height
-                width: UM.Theme.getSize("setting_control").width
-                height: UM.Theme.getSize("setting_control").height
-                text: catalog.i18nc("@label", "Test Notification")
-                onClicked: triggerAction("testNotification")
-            }
-
-            Cura.TertiaryButton{
-                id: makeToastButton
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
-                spacing: UM.Theme.getSize("default_margin").height
-                width: UM.Theme.getSize("setting_control").width
-                height: UM.Theme.getSize("setting_control").height
-                text: catalog.i18nc("@label", "Create Test Message")
-                onClicked: triggerAction("createTestMessage")
-            }
-
-            UM.CheckBox {
-                id: fadeToastsCheckbox
-                Layout.fillWidth: true
-                text: catalog.i18nc("@label","Fade Messages")
-                checked: hideToastsProp
-                onClicked: {
-                    hideToastsProp = checked
-                    setProperty("HideToasts", checked)
                 }
             }
         }
