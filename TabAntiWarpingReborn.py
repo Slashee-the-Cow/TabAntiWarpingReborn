@@ -176,6 +176,8 @@ class TabAnitWarpingReborn(Tool):
                 return
 
             log("d", "You clicked!")
+            #Message(text = "You clicked!", title = "Grats!").show()
+
 
             if self._skip_press:
                 # The selection was previously cleared, do not add/remove an support mesh but
