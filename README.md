@@ -31,6 +31,8 @@ For that you need to use Cura's built in move tool. Just hold Ctrl and click on 
 ## Want to say hi? Got an idea? Found a bug I haven't?
 **I want to hear it!** Just swing by the [the GitHub repo](https://github.com/Slashee-the-Cow/TabAntiWarpingReborn) and go to discussions, or issues.
 ## What are the latest updates?
+#### v1.0.1:
+- Made my own notifications (in tool panel) because a bug in Cura can cause invalid placement using normal messages.
 ### v1.0.0: Initial release
 #### What's new?
 - Automatically adding tabs now has two options: more tabs (which might overlap) or fewer tabs (which might miss some points). On a lot of models it won't make much difference either way. If you're not sure, go for more.
@@ -59,13 +61,15 @@ I did take a couple of features out of the previous incarnation.
 - There were a few post-processing scripts which I don't think Cura could access anyway, and didn't seem particularly useful, so I took those out.
 - There are so many changes the translation files would just completely not work, so I took them out. If you want to translate it, get in touch!
 ## Known Issues?
-- The notification system is ugly and primitive. Cura's built in notifications are pretty and smart. Except they seem to break things.
-- Changes settings related to support so it's not necessarily appropriate for models that need support.
+- The notification system is not pretty and it's and primitive. Cura's built in notifications are pretty and smart. Except they seem to break things.
+- Using tabs changes settings related to support so it's not necessarily appropriate for models that need support.  
 This is required to make sure the tabs don't become part of the model and are printed before it.
+- If some settings have been manually changed then the plugin attempting to change them will fail.  
+If you would be so kind as to revert them to default so the plugin can change them, that would be awesome.
 - The *Remove All Tabs* button might not remove all the tabs any more, depending on what's happened since the tabs were created.
 This is a side effect of making it not remove support meshes which aren't tabs.
 - Sometimes Cura miscalculates the click position for creating a new tab.
 I prevented the more extreme circumstances but it can still get it wrong sometimes.
 As far as I can tell this is an issue with Cura (though I'd really love it if someone showed me it isn't :D) and not something I can fix on my end.
-You can safely delete any tabs in the wrong place.
-- It's possible to change settings from the optimal defaults set when creating a tab. Please don't.
+I have implemented a workaround which *should* help, but I can't give you an iron-clad guarantee on that.
+- It's possible to change print quality settings from the optimal defaults set when creating a tab. Please don't.

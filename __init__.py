@@ -1,7 +1,7 @@
 # Copyright (c) 2022 5@xes
 # Based on the TabAntiWarping plugin  and licensed under LGPLv3 or higher.
 
-   
+
 from . import TabAntiWarpingReborn
 
 from UM.i18n import i18nCatalog
@@ -9,7 +9,7 @@ i18n_catalog = i18nCatalog("tabawreborn")
 
 def getMetaData():
     qml_file="qml/tabawreborn.qml"
-        
+
     return {
         "tool": {
             "name": i18n_catalog.i18nc("@label", "Tab Anti-Warping Reborn"),
