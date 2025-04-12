@@ -28,12 +28,15 @@
 # - Choice of density of auto generated tabs (minimum distance being radius or diameter) for those into Feng Shui and don't want clutter.
 # - Added checks to make sure a tab isn't created off the build plate, or too close to edge, since Cura's aim sucks and tries to put tabs way off in the distance sometimes.
 #--------------------------------------------------------------------------------------------
+# v1.0.1
+# - Rolled my own notification UI as part of the tool control panel since UM.Messages hate both me and the support blocker tool.
+#--------------------------------------------------------------------------------------------
 # There seems to be a bug with UM.Message.Message that makes PickingPass go wildly off course if there's one on screen.
 # Hence why I rolled my own. It's much inferior, except that it doesn't seem to break things.
 
+from dataclasses import dataclass
 import math
 import os.path
-import time
 from typing import List
 
 import numpy
@@ -43,7 +46,7 @@ from cura.PickingPass import PickingPass
 from cura.Scene.BuildPlateDecorator import BuildPlateDecorator
 from cura.Scene.CuraSceneNode import CuraSceneNode
 from cura.Scene.SliceableObjectDecorator import SliceableObjectDecorator
-from PyQt6.QtCore import Qt, QTimer, QVariant
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtQml import QJSValue
 from PyQt6.QtWidgets import QApplication
 from UM.Event import Event, MouseEvent
@@ -65,6 +68,13 @@ from UM.Tool import Tool
 
 from .FeedbackDisplay import FeedbackDisplay
 
+@dataclass
+class Notification:
+    """Holds info for a notification message since I can't use UM.Message"""
+    text: str  # If I need to explain this you're probably not qualified to work with this code.
+    lifetime: float  # Notification lifetime in seconds
+    id: int  # Becasue we've all gotten our notifications mixed up while out shopping... right?
+
 Resources.addSearchPath(
     os.path.join(os.path.abspath(os.path.dirname(__file__)))
 )  # Plugin translation file import
@@ -74,7 +84,7 @@ catalog = i18nCatalog("tabawreborn")
 if catalog.hasTranslationLoaded():
     Logger.log("i", "Tab Anti-Warping Reborn plugin translation loaded")
 
-DEBUG_MODE = False
+DEBUG_MODE = True
 
 def log(level: str, message: str) -> None:
     """Wrapper function for logging messages using Cura's Logger, but with debug mode so as not to spam you."""
@@ -95,17 +105,18 @@ class TabAnitWarpingReborn(Tool):
 
     def __init__(self) -> None:
         super().__init__()
-        
+
         # List of tabs we've created
         self._scene_tabs = []
-        
+
         # variable for menu dialog
         self._tab_size: float = 0.0
         self._xy_distance: float = 0.0
         self._as_dish: bool = False
         self._layer_count: int = 1
         self._inputs_valid: bool = False
-        
+        self._hide_toasts: bool = True
+
         self._any_as_dish = False # Track if any dish supports have been created
 
         # Shortcut
@@ -113,14 +124,14 @@ class TabAnitWarpingReborn(Tool):
         self._controller = self.getController()
         self._selection_pass = None
         self._application = CuraApplication.getInstance()
-        
+
         self._feedback_display = FeedbackDisplay()
-        
-        self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount", "InputsValid", "LogMessage")
-        
+
+        self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount", "InputsValid", "Notifications", "HideToasts", "LogMessage")
+
         CuraApplication.getInstance().globalContainerStackChanged.connect(self._updateEnabled)
-        
-         
+
+
         # Note: if the selection is cleared with this tool active, there is no way to switch to
         # another tool than to reselect an object (by clicking it) because the tool buttons in the
         # toolbar will have been disabled. That is why we need to ignore the first press event
@@ -133,19 +144,50 @@ class TabAnitWarpingReborn(Tool):
         self._had_selection_timer.setInterval(0)
         self._had_selection_timer.setSingleShot(True)
         self._had_selection_timer.timeout.connect(self._selectionChangeDelay)
-        
+
         # set the preferences to store the default value
         self._preferences = CuraApplication.getInstance().getPreferences()
         self._preferences.addPreference("tabawreborn/tab_size", 10)
         self._preferences.addPreference("tabawreborn/xy_distance", 0.16)
         self._preferences.addPreference("tabawreborn/create_dish", False)
         self._preferences.addPreference("tabawreborn/layer_count", 1)
-        
+
         self._tab_size = float(self._preferences.getValue("tabawreborn/tab_size"))
         self._xy_distance = float(self._preferences.getValue("tabawreborn/xy_distance"))
         self._as_dish = bool(self._preferences.getValue("tabawreborn/create_dish"))
         self._layer_count = int(self._preferences.getValue("tabawreborn/layer_count"))
-        
+
+        # Hold variables needed for the deferred PickingPass
+        self._last_picked_node: CuraSceneNode = None
+        self._last_event: Event = None
+
+        self._are_messages_hidden: bool = False
+        self._hidden_messages: list[Message] = []
+
+        self._default_message_title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")
+
+        self._notifications: list[Notification] = []
+        self._notification_next_id: int = 0
+        self._notifications_string: str = ""
+
+        #self._application.hideMessageSignal.connect(self._application_hide_message)
+        #self._application.showMessageSignal.connect(self._application_show_message)
+        #self._application.visibleMessageAdded.connect(self._application_visible_added)
+        #self._application.visibleMessageRemoved.connect(self._application_visible_hidden)
+        #self._test_timers: dict[int, QTimer] = {}  # To hold references to test timers
+
+    def _application_hide_message(self, message: Message):
+        log("d", f"message with text {message._text} and id{id(message)} just fired _application.hideMessageSignal")
+
+    def _application_show_message(self, message: Message):
+        log("d", f"message with text {message._text} and id{id(message)} just fired _application.showMessageSignal")
+
+    def _application_visible_added(self, message: Message):
+        log("d", f"message with text {message._text} and id{id(message)} just fired _application.visibleMessageAdded")
+
+    def _application_visible_hidden(self, message: Message):
+        log("d", f"message with text {message._text} and id{id(message)} just fired _application.visibleMessageHidden")
+
     def event(self, event) -> None:
         super().event(event)
         modifiers = QApplication.keyboardModifiers()
@@ -155,8 +197,26 @@ class TabAnitWarpingReborn(Tool):
             if ctrl_is_active:
                 self._controller.setActiveTool("TranslateTool")
                 return
-            
+
             #self._feedback_display.show_feedback("You clicked!")
+            log("dd", "You clicked!")
+            #try:
+                #log("dd", f"about to try and set self._toasts[self.MESSAGE_TEST_CLICK] which is currently {self._toasts[self.MESSAGE_TEST_CLICK]}")
+                #self._show_toast(self.MESSAGE_TEST_CLICK, text = "You clicked", lifetime = 10, title = "Grats!")
+                #try:
+                #    self._toast_blueprints[self.MESSAGE_TEST_CLICK] = MessageBlueprint("You clicked!", 10, self._default_message_title)
+                #except Exception as e:
+                #    log("e", f"Creating a MessageBlueprint raised {e}")
+                #try:
+                #    self._show_toast_blueprint(self.MESSAGE_TEST_CLICK)
+                #except Exception as e:
+                #    log("e", f"Showing a MessageBlueprint raised {e}")
+            #except Exception as e:
+                #log("e", f"event() got an exception trying to show message: {e}")
+            #you_clicked = Message(text="You clicked!", lifetime=10, title = self._default_message_title)
+            #you_clicked.show()
+
+            log("dd", "event() just showed message, I hope")
 
             if self._skip_press:
                 # The selection was previously cleared, do not add/remove an support mesh but
@@ -168,86 +228,213 @@ class TabAnitWarpingReborn(Tool):
                 # The selection renderpass is used to identify objects in the current view
                 self._selection_pass = CuraApplication.getInstance().getRenderer().getRenderPass("selection")
             picked_node = self._controller.getScene().findObject(self._selection_pass.getIdAtPosition(event.x, event.y))
-            
+
             if not picked_node:
                 # There is no slicable object at the picked location
                 return
             log("d", f"picked_node = {picked_node}")
             if not self._inputs_valid:
                 log("d", "Tried to create tab with invalid inputs")
-                self._feedback_display.show_feedback(catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."), 10000)
+                self._notification_add(catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."), 10)
+                #self._feedback_display.show_feedback(catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."), 10000)
+                #self._show_toast(self.MESSAGE_INVALID_SETTINGS, text = catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."),
+                #                 lifetime = 15, title=self._default_message_title)
                 #Message(text = catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."),
                 #        title = catalog.i18nc("add_tab_invalid_input_title", "Tab Anti-Warping Reborn")).show()
                 return
-            
-            node_world_transform = picked_node.getWorldTransformation()
-            if node_world_transform:
-                node_position = node_world_transform.getTranslation()
-                log("dd", f"picked_node world position = {node_position}")
-            else:
-                log("d", "picked_node has no world transformation")
 
-            node_stack = picked_node.callDecoration("getStack")
+            log("d", "event() just got past valid input check")
+            self._last_picked_node = picked_node
+            self._last_event = event
+
+            # Hide all currently shown messages
+            if self._hide_toasts:
+                try:  # In a try...except for now at least, just to make sure anything gets caught
+                    self._hide_messages()
+                except Exception as e:
+                    log("e", f"_hide_messages raised {e}")
+            # Defer PickingPass until the next event loop
+            QTimer.singleShot(250 if self._are_messages_hidden else 0, self._picking_pass)
+            log("d", "event() set the timer")
+            return
+
+    def _picking_pass(self):
+        log("d", "_picking_pass is just getting started")
+        picked_node = self._last_picked_node
+        event = self._last_event
+        log("d", f"_picking_pass working on picked_node {picked_node}")
 
 
-            if node_stack:
-                if node_stack.getProperty("support_mesh", "value"):
-                    self._removeSupportMesh(picked_node)
-                    return
-                if node_stack.getProperty("anti_overhang_mesh", "value") or node_stack.getProperty("infill_mesh", "value") or node_stack.getProperty("support_mesh", "value"):
-                    # Only "normal" meshes can have support_mesh added to them
-                    return
-            #Message("You just added a tab!", title="Grats!").show()
+        node_world_transform = picked_node.getWorldTransformation()
+        if node_world_transform:
+            node_position = node_world_transform.getTranslation()
+            log("dd", f"picked_node world position = {node_position}")
+        else:
+            log("d", "picked_node has no world transformation")
 
-            # Create a pass for picking a world-space location from the mouse location
-            #log("d", "PICKING: About to get active camera")
-            active_camera = self._controller.getScene().getActiveCamera()
-            #log("d", f"All about active_camera: -- Parent: {active_camera.getParent()} -- Mirror: {active_camera.getMirror()} -- BoundingBoxMesh: {active_camera.getBoundingBoxMesh()} -- Decorators: {active_camera.getDecorators()} -- Name: {active_camera.getName()} -- ID: {active_camera.getId()} -- Depth: {active_camera.getDepth()} -- isVisible: {active_camera.isVisible()} -- MeshData: {active_camera.getMeshData()} -- MeshDataTransformed: {active_camera.getMeshDataTransformed()} -- MeshDataTransformed.toString(): {active_camera.getMeshDataTransformed().toString()} -- MeshDataTransformedVertices: {active_camera.getMeshDataTransformedVertices()} -- MeshDataTransformedNormals: {active_camera.getMeshDataTransformedNormals()} -- Children: {active_camera.getChildren()} -- AllChildren: {active_camera.getAllChildren()} -- CachedNormalMatrix: {active_camera.getCachedNormalMatrix()} -- WorldTransformation: {active_camera.getWorldTransformation()} -- LocalTransform: {active_camera.getLocalTransformation()} -- Orientation: {active_camera.getOrientation()} -- WorldOrientation: {active_camera.getWorldOrientation()} -- Scale: {active_camera.getScale()} -- WorldScale: {active_camera.getWorldScale()} -- Position: {active_camera.getPosition()} -- WorldPosition: {active_camera.getWorldPosition()} -- isEnabled: {active_camera.isEnabled()} -- isSelectable: {active_camera.isSelectable()} -- BoundingBox: {active_camera.getBoundingBox()} -- Shear: {active_camera.getShear()} -- AutoAdjustViewport: {active_camera.getAutoAdjustViewPort()} -- DefaultZoomFactor: {active_camera.getDefaultZoomFactor()} -- ZoomFactor: {active_camera.getZoomFactor()} -- ProjectionMatrix: {active_camera.getProjectionMatrix()} -- ViewportWidth: {active_camera.getViewportWidth()} -- ViewportHeight: {active_camera.getViewportHeight()} -- ViewProjectionMatrix: {active_camera.getViewProjectionMatrix()} -- WindowSize: {active_camera.getWindowSize()} -- InverseWorldTransformation: {active_camera.getInverseWorldTransformation()} -- CameraLightPosition: {active_camera.getCameraLightPosition()} -- isPerspective: {active_camera.isPerspective()} -- ")
-            #log("d", "PICKING: About to create PickingPass instance")
-            picking_pass = PickingPass(active_camera.getViewportWidth(), active_camera.getViewportHeight())
-            #log("d", "PICKING: About to render pass")
-            picking_pass.render()
-            #log("d", "PICKING: Just rendered pass.")
+        node_stack = picked_node.callDecoration("getStack")
 
-            log("dd", f"event.x = {event.x}, event.y = {event.y}")
-            picked_position = picking_pass.getPickedPosition(event.x, event.y)
 
-            log("dd", f"repr(picked_position) = {repr(picked_position)}")
-            if not self._check_valid_tab_placement(picked_position):
+        if node_stack:
+            if node_stack.getProperty("support_mesh", "value"):
+                self._removeSupportMesh(picked_node)
+                log("dd", f"_picking_pass just found that picked_node was support and removed it")
+                # Show previously hidden Messages
+                log("d", f"_picking_pass about to run _show_messages while _hidden_messages is {self._hidden_messages}")
+                try:
+                    self._show_messages()
+                except Exception as e:
+                    log("e", f"_show_messages raised {e}")
                 return
-                            
-            # Add the tab at the picked location
-            self._createSupportMesh(picked_node, picked_position)
+            if node_stack.getProperty("anti_overhang_mesh", "value") or node_stack.getProperty("infill_mesh", "value") or node_stack.getProperty("support_mesh", "value"):
+                # Only "normal" meshes can have support_mesh added to them
+                log("dd", f"_picking_pass found that picked_node {picked_node} is the wrong kind of mesh")
+                # Show previously hidden Messages
+                log("d", f"_picking_pass about to run _show_messages while _hidden_messages is {self._hidden_messages}")
+                try:
+                    self._show_messages()
+                except Exception as e:
+                    log("e", f"_show_messages raised {e}")
+                return
+        #Message("You just added a tab!", title="Grats!").show()
+
+        # Create a pass for picking a world-space location from the mouse location
+        #log("d", "PICKING: About to get active camera")
+        active_camera = self._controller.getScene().getActiveCamera()
+        #log("d", f"All about active_camera: -- Parent: {active_camera.getParent()} -- Mirror: {active_camera.getMirror()} -- BoundingBoxMesh: {active_camera.getBoundingBoxMesh()} -- Decorators: {active_camera.getDecorators()} -- Name: {active_camera.getName()} -- ID: {active_camera.getId()} -- Depth: {active_camera.getDepth()} -- isVisible: {active_camera.isVisible()} -- MeshData: {active_camera.getMeshData()} -- MeshDataTransformed: {active_camera.getMeshDataTransformed()} -- MeshDataTransformed.toString(): {active_camera.getMeshDataTransformed().toString()} -- MeshDataTransformedVertices: {active_camera.getMeshDataTransformedVertices()} -- MeshDataTransformedNormals: {active_camera.getMeshDataTransformedNormals()} -- Children: {active_camera.getChildren()} -- AllChildren: {active_camera.getAllChildren()} -- CachedNormalMatrix: {active_camera.getCachedNormalMatrix()} -- WorldTransformation: {active_camera.getWorldTransformation()} -- LocalTransform: {active_camera.getLocalTransformation()} -- Orientation: {active_camera.getOrientation()} -- WorldOrientation: {active_camera.getWorldOrientation()} -- Scale: {active_camera.getScale()} -- WorldScale: {active_camera.getWorldScale()} -- Position: {active_camera.getPosition()} -- WorldPosition: {active_camera.getWorldPosition()} -- isEnabled: {active_camera.isEnabled()} -- isSelectable: {active_camera.isSelectable()} -- BoundingBox: {active_camera.getBoundingBox()} -- Shear: {active_camera.getShear()} -- AutoAdjustViewport: {active_camera.getAutoAdjustViewPort()} -- DefaultZoomFactor: {active_camera.getDefaultZoomFactor()} -- ZoomFactor: {active_camera.getZoomFactor()} -- ProjectionMatrix: {active_camera.getProjectionMatrix()} -- ViewportWidth: {active_camera.getViewportWidth()} -- ViewportHeight: {active_camera.getViewportHeight()} -- ViewProjectionMatrix: {active_camera.getViewProjectionMatrix()} -- WindowSize: {active_camera.getWindowSize()} -- InverseWorldTransformation: {active_camera.getInverseWorldTransformation()} -- CameraLightPosition: {active_camera.getCameraLightPosition()} -- isPerspective: {active_camera.isPerspective()} -- ")
+        #log("d", "PICKING: About to create PickingPass instance")
+        picking_pass = PickingPass(active_camera.getViewportWidth(), active_camera.getViewportHeight())
+        log("d", f"_picking_pass: active_camera.getViewportWidth() = {active_camera.getViewportWidth()} and active_camera.getViewportHeight = {active_camera.getViewportHeight()}")
+        #log("d", "PICKING: About to render pass")
+        picking_pass.render()
+        #log("d", "PICKING: Just rendered pass.")
+
+        log("dd", f"event.x = {event.x}, event.y = {event.y}")
+        picked_position = picking_pass.getPickedPosition(event.x, event.y)
+        self._notification_add(repr(picked_position), 5)
+
+        log("dd", f"repr(picked_position) = {repr(picked_position)}")
+        if not self._check_valid_tab_placement(picked_position):
+            log("dd", f"picked_position {picked_position} deemed invalid")
+            # Show previously hidden Messages
+            log("d", f"_picking_pass about to run _show_messages while _hidden_toasts is {self._hidden_messages}")
+            try:
+                self._show_messages()
+            except Exception as e:
+                log("e", f"_show_messages raised {e}")
+            return
+
+        # Add the tab at the picked location
+        self._createSupportMesh(picked_node, picked_position)
+
+        # Show previously hidden Messages
+        log("d", f"_picking_pass about to run _show_messages while _hidden_toasts is {self._hidden_messages}")
+        try:
+            self._show_messages()
+        except Exception as e:
+            log("e", f"_show_messages raised {e}")
+
+    def _hide_messages(self):
+        log("d", f"_hide_messages is running with an _application.getVisibleMessages() of {self._application.getVisibleMessages()}")
+        message_count = len(self._application.getVisibleMessages())
+        if message_count == 0:
+            self._are_messages_hidden = False
+            return
+
+        self._are_messages_hidden = True
+        self._notification_add("<font color='red'>Do not move the camera until the click location is recorded.</font>", 1)
+        self._hidden_messages = list(self._application.getVisibleMessages())
+        log("d", f"_hide_messages just set _hidden_messages to {self._hidden_messages}")
+        for message in self._hidden_messages:
+            log("d", f"Before hideMessage, lifetime = {message._lifetime}")
+            message.hide()
+            log("d", f"After hideMessage, lifetime = {message._lifetime}")
+
+    def _show_messages(self):
+        if not self._are_messages_hidden:
+            return
+
+        self._notification_add("<font color='green'>Click position has been recorded.</font>", 3)
+        for message in self._hidden_messages:
+            log("d", f"Before showMessage, lifetime = {message._lifetime}")
+            message.show()
+            #message.hide()
+            """if message._lifetime > 0:
+                test_timer = QTimer()
+                test_timer.setInterval(5000)  # 5 seconds
+                test_timer.setSingleShot(True)
+                test_timer.timeout.connect(message.hide)
+                test_timer.start()
+                self._test_timers[id(message)] = test_timer  # Store a reference
+                log("w", f"DEBUG: Persistent test timer started for message: {message._text} (ID: {id(message)})")
+
+            log("d", f"After showMessage, lifetime: {message._lifetime}, timer object: {message._lifetime_timer}")
+            if message._lifetime_timer:
+                log("d", f"Timer isSingleShot: {message._lifetime_timer.isSingleShot()}")
+                log("d", f"Timer interval: {message._lifetime_timer.interval()}")
+                log("d", f"Timer isActive: {message._lifetime_timer.isActive()}")
+            else:
+                log("w", "Lifetime timer is None after showMessage!")"""
+
+        self._are_messages_hidden = False
+        self._hidden_messages = []
+
+    def createTestMessage(self):
+        Message(text = "I'm a toast, not a test!", lifetime = 30, title = "A Test").show()
+
+    def testFeedbackDisplay(self):
+        self._feedback_display.show_feedback("I'm feedback!", 5000)
+
+    def testNotification(self):
+        self._notification_add("I die in 10 seconds!", 10)
+
+    def _notification_add(self, text: str, lifetime: float) -> None:
+        notification = Notification(text, lifetime, self._notification_next_id)
+        self._notifications.append(notification)
+        self._notification_next_id += 1
+        self._notifications_set_property()
+        QTimer.singleShot(int(lifetime * 1000), lambda: self._notification_remove(notification))
+
+    def _notification_remove(self, notification: Notification) -> None:
+        if notification in self._notifications:
+            self._notifications.remove(notification)
+            self._notifications_set_property()
+        else:
+            log("d", f"_notification_remove could not find notification with text {notification.text} and ID {notification.id}")
+
+    def _notifications_set_property(self) -> None:
+        self._notifications_string = "<br><br>".join(notification.text for notification in self._notifications)
+        self.propertyChanged.emit()
 
     def _createSupportMesh(self, parent: CuraSceneNode, position: Vector):
         node = CuraSceneNode()
 
-        node.setName("Tab")
-            
+        node.setName("AdhesionTab")
+
         node.setSelectable(True)
-        
+
         # long=Support Height
         tab_start_y=position.y
 
         global_stack = CuraApplication.getInstance().getGlobalContainerStack()
 
         extruder_stack = CuraApplication.getInstance().getExtruderManager().getActiveExtruderStacks()[0]
-        
+
         # Reasonable defaults for the "standard" 0.4mm nozzle
         layer_height_0: float = 0.3
         layer_height: float = 0.2
         line_width: float = 0.4
-        
+
         try:
             layer_height_0 = float(extruder_stack.getProperty("layer_height_0", "value"))
             layer_height = float(extruder_stack.getProperty("layer_height", "value"))
             line_width = float(extruder_stack.getProperty("line_width", "value"))
         except ValueError as e:
             log("e", f"Error encountered getting properties from the extruder_stack: {e}")
-        
+
         tab_total_height = (layer_height_0 * 1.2) + (layer_height * (self._layer_count -1))
         tab_line_width = line_width * 1.2
-        
+
         if self._as_dish:
              # Capsule creation Diameter , Increment angle 10°, length, layer_height_0*1.2 , line_width
             mesh = self._create_dish(self._tab_size, 10, tab_start_y, tab_total_height, tab_line_width)
@@ -277,7 +464,7 @@ class TabAnitWarpingReborn(Tool):
         new_instance.setProperty("value", False)
         new_instance.resetState()  # Ensure that the state is not seen as a user state.
         settings.addInstance(new_instance)
- 
+
         # Define support_type
         if self._any_as_dish or self._as_dish:
             support_type_key="support_type"
@@ -285,11 +472,12 @@ class TabAnitWarpingReborn(Tool):
             #log("d", f"BEFORE: global stack support_type = {support_placement}")
             if support_placement == "buildplate":
                 message_string = catalog.i18nc("@info:support_placement_modified", "Support placement has been set to Everywhere to ensure dish tabs work correctly.")
-                self._feedback_display.show_feedback(message_string, 10000)
+                #self._feedback_display.show_feedback(message_string, 10000)
+                self._notification_add(message_string, 10)
                 #Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
                 global_stack.setProperty(support_type_key, "value", "everywhere")
                 #log("d", f"AFTER: global stack support_type = {global_stack.getProperty(support_type_key, 'value')}")
-               
+
         # Define support_xy_distance
         definition = stack.getSettingDefinition("support_xy_distance")
         new_instance = SettingInstance(definition, settings)
@@ -305,7 +493,8 @@ class TabAnitWarpingReborn(Tool):
         log("d", f"BEFORE: global stack {support_xy_key} = {stack_xy_distance}")
         if self._xy_distance != stack_xy_distance:
             message_string = f'{catalog.i18nc("@info:support_xy_modified", "Support X/Y distance has been changed to match tab tool settings of")} {str(self._xy_distance)}mm.'
-            self._feedback_display.show_feedback(message_string, 10000)
+            self._notification_add(message_string, 10)
+            #self._feedback_display.show_feedback(message_string, 10000)
             #Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
             global_stack.setProperty(support_xy_key, "value", self._xy_distance)
             log("d", f"AFTER: global stack {support_xy_key} = {global_stack.getProperty(support_xy_key, 'value')}")
@@ -317,12 +506,13 @@ class TabAnitWarpingReborn(Tool):
             #log("d", f"BEFORE: global stack support_infill = {support_infill}")
             if support_infill < 100.0:
                 message_string = catalog.i18nc("@info:support_infill_modified", "Support density has been set to 100% to ensure tabs over 1 layer high are solid.")
-                self._feedback_display.show_feedback(message_string, 10000)
+                self._notification_add(message_string, 10)
+                #self._feedback_display.show_feedback(message_string, 10000)
                 #Message(text = message_string , title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
                 global_stack.setProperty(support_infill_key, "value", 100.0)
                 #log("d", f"AFTER: global stack support_infill = {extruder_stack.getProperty(support_infill_key, 'value')}")
-                
-        
+
+
         scene_op = GroupedOperation()
         # First add node to the scene at the correct position/scale, before parenting, so the support mesh does not get scaled with the parent
         scene_op.addOperation(AddSceneNodeOperation(node, self._controller.getScene().getRoot()))
@@ -331,7 +521,7 @@ class TabAnitWarpingReborn(Tool):
         scene_op.push()
         self._scene_tabs.append(node)
         self.propertyChanged.emit()
-        
+
         CuraApplication.getInstance().getController().getScene().sceneChanged.emit(node)
 
     def _check_valid_tab_placement(self, picked_position) -> bool:
@@ -345,7 +535,8 @@ class TabAnitWarpingReborn(Tool):
             or picked_position.z < -(machine_depth / 2)
             or picked_position.z > (machine_depth / 2)
         ):
-            self._feedback_display.show_feedback(catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."), 7500)
+            self._notification_add(catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."), 7.5)
+            #self._feedback_display.show_feedback(catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."), 7500)
             #Message(
             #    text = catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."),
             #    title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
@@ -362,15 +553,16 @@ class TabAnitWarpingReborn(Tool):
             or picked_position.z < front_edge
             or picked_position.z > rear_edge
         ):
-            self._feedback_display.show_feedback(catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."), 7500)
+            self._notification_add(catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."), 7.5)
+            #self._feedback_display.show_feedback(catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."), 7500)
             #Message(
             #    text = catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."),
             #    title= catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
             return False
-        
+
         #TODO: Use SceneNode.collidesWithBbox()
         return True
-    
+
     def _removeSupportMesh(self, node: CuraSceneNode):
         parent = node.getParent()
         if parent == self._controller.getScene().getRoot():
@@ -402,7 +594,8 @@ class TabAnitWarpingReborn(Tool):
                         plugin_enabled = True #Enable plugin if support meshes exist.
                         if not global_container_stack.getProperty("support_mesh", "enabled"):
                             global_container_stack.setProperty("support_mesh", "enabled", True)
-                            self._feedback_display.show_feedback(catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), 5000)
+                            self._notification_add(catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), 5)
+                            #self._feedback_display.show_feedback(catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), 5000)
                             #Message(text = catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), title = catalog.i18nc("@info:title", "Tab Anti-Warping Reborn")).show() #Show toast message.
                         break
 
@@ -410,7 +603,7 @@ class TabAnitWarpingReborn(Tool):
                 plugin_enabled = global_container_stack.getProperty("support_mesh", "enabled") #Use global setting, when no support meshes exist.
 
         CuraApplication.getInstance().getController().toolEnabledChanged.emit(self._plugin_id, plugin_enabled)
-    
+
     def _onSelectionChanged(self):
         # When selection is passed from one object to another object, first the selection is cleared
         # and then it is set to the new object. We are only interested in the change from no selection
@@ -427,7 +620,7 @@ class TabAnitWarpingReborn(Tool):
             self._skip_press = False
 
         self._had_selection = has_selection
- 
+
     # Capsule creation
     def _create_dish(self, base_diameter: float, segments: int , height: float, top_height: float, line_width: float):
         """Create a "dish" style adhesion tab"""
@@ -449,14 +642,14 @@ class TabAnitWarpingReborn(Tool):
         inner_radius_cap=cap_radius-(1.8*line_width)
         # Top radius
         inner_radius_base=base_radius-(1.8*line_width)
-            
+
         vertices = []
         for i in range(0, segment_angle):
             # Top
             vertices.append([inner_radius_cap*math.cos(i*segment_radians), cap_height, inner_radius_cap*math.sin(i*segment_radians)])
             vertices.append([cap_radius*math.cos((i+1)*segment_radians), cap_height, cap_radius*math.sin((i+1)*segment_radians)])
             vertices.append([cap_radius*math.cos(i*segment_radians), cap_height, cap_radius*math.sin(i*segment_radians)])
-            
+
             vertices.append([inner_radius_cap*math.cos((i+1)*segment_radians), cap_height, inner_radius_cap*math.sin((i+1)*segment_radians)])
             vertices.append([cap_radius*math.cos((i+1)*segment_radians), cap_height, cap_radius*math.sin((i+1)*segment_radians)])
             vertices.append([inner_radius_cap*math.cos(i*segment_radians), cap_height, inner_radius_cap*math.sin(i*segment_radians)])
@@ -465,22 +658,22 @@ class TabAnitWarpingReborn(Tool):
             vertices.append([cap_radius*math.cos(i*segment_radians), cap_height, cap_radius*math.sin(i*segment_radians)])
             vertices.append([cap_radius*math.cos((i+1)*segment_radians), cap_height, cap_radius*math.sin((i+1)*segment_radians)])
             vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])
-            
+
             #Side 1b
             vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])
             vertices.append([base_radius*math.cos(i*segment_radians), min_y, base_radius*math.sin(i*segment_radians)])
             vertices.append([cap_radius*math.cos(i*segment_radians), cap_height, cap_radius*math.sin(i*segment_radians)])
- 
+
             #Side 2a
             vertices.append([inner_radius_base*math.cos((i+1)*segment_radians), max_y, inner_radius_base*math.sin((i+1)*segment_radians)])
             vertices.append([inner_radius_cap*math.cos((i+1)*segment_radians), cap_height, inner_radius_cap*math.sin((i+1)*segment_radians)])
             vertices.append([inner_radius_cap*math.cos(i*segment_radians), cap_height, inner_radius_cap*math.sin(i*segment_radians)])
-            
+
             #Side 2b
             vertices.append([inner_radius_cap*math.cos(i*segment_radians), cap_height, inner_radius_cap*math.sin(i*segment_radians)])
             vertices.append([inner_radius_base*math.cos(i*segment_radians), max_y, inner_radius_base*math.sin(i*segment_radians)])
             vertices.append([inner_radius_base*math.cos((i+1)*segment_radians), max_y, inner_radius_base*math.sin((i+1)*segment_radians)])
-                
+
             #Bottom Top
             vertices.append([0, max_y, 0])
             vertices.append([inner_radius_base*math.cos((i+1)*segment_radians), max_y, inner_radius_base*math.sin((i+1)*segment_radians)])
@@ -489,7 +682,7 @@ class TabAnitWarpingReborn(Tool):
             #Bottom
             vertices.append([0, min_y, 0])
             vertices.append([base_radius*math.cos(i*segment_radians), min_y, base_radius*math.sin(i*segment_radians)])
-            vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)]) 
+            vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])
 
         mesh.setVertices(numpy.asarray(vertices, dtype=numpy.float32))
 
@@ -513,7 +706,7 @@ class TabAnitWarpingReborn(Tool):
         min_y = -start_y
         segment_angle = int(360 / segments)
         segment_radians = math.radians(segments)
-        
+
         vertices = []
         for i in range(0, segment_angle):
             # Top
@@ -528,11 +721,11 @@ class TabAnitWarpingReborn(Tool):
             vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])
             vertices.append([base_radius*math.cos(i*segment_radians), min_y, base_radius*math.sin(i*segment_radians)])
             vertices.append([base_radius*math.cos(i*segment_radians), max_y, base_radius*math.sin(i*segment_radians)])
-            #Bottom 
+            #Bottom
             vertices.append([0, min_y, 0])
             vertices.append([base_radius*math.cos(i*segment_radians), min_y, base_radius*math.sin(i*segment_radians)])
-            vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])          
-            
+            vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])
+
         mesh.setVertices(numpy.asarray(vertices, dtype=numpy.float32))
 
         indices = []
@@ -544,7 +737,7 @@ class TabAnitWarpingReborn(Tool):
 
         mesh.calculateNormals()
         return mesh
- 
+
     def removeAllSupportMesh(self):
         if self._scene_tabs:
             for node in self._scene_tabs:
@@ -555,10 +748,11 @@ class TabAnitWarpingReborn(Tool):
             self._scene_tabs.clear()
             self._any_as_dish = False
             self.propertyChanged.emit()
-            self._feedback_display.show_feedback(catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."))
-            #Message(text = catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."), title=catalog.i18nc("remove_all_title", "Tab Anti-Warping Reborn"))
- 
-    # Source code from MeshTools Plugin 
+            self._notification_add(catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."), 10)
+            #self._feedback_display.show_feedback(catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."))
+            #Message(text = catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."), title=catalog.i18nc("remove_all_title", "Tab Anti-Warping Reborn")).show()
+
+    # Source code from MeshTools Plugin
     # Copyright (c) 2020 Aldo Hoeben / fieldOfView
     def _getAllSelectedNodes(self) -> List[SceneNode]:
         selection = Selection.getAllSelectedObjects()
@@ -592,7 +786,7 @@ class TabAnitWarpingReborn(Tool):
                 log("d", f"addAutoSupportMesh got QVariant {variant} which isn't a dict")
         else:
             log("d", f"addAutoSupportMesh did not get a QJSValue passed to it. It got {data}")
-        
+
         nodes_list = self._getAllSelectedNodes()
         if not nodes_list:
             nodes_list = DepthFirstIterator(self._application.getController().getScene().getRoot())
@@ -607,7 +801,7 @@ class TabAnitWarpingReborn(Tool):
             type_infill_mesh = node_stack.getProperty("infill_mesh", "value")
             type_cutting_mesh = node_stack.getProperty("cutting_mesh", "value")
             type_support_mesh = node_stack.getProperty("support_mesh", "value")
-            type_anti_overhang_mesh = node_stack.getProperty("anti_overhang_mesh", "value") 
+            type_anti_overhang_mesh = node_stack.getProperty("anti_overhang_mesh", "value")
 
             if any((type_infill_mesh, type_cutting_mesh, type_support_mesh, type_anti_overhang_mesh)):
                 continue
@@ -636,10 +830,11 @@ class TabAnitWarpingReborn(Tool):
                 if difference_length >= minimum_distance or first_to_last_length >= minimum_distance:
                     self._createSupportMesh(node, new_position)
                     last_tab_position = new_position
-        
-        # Switch to translate tool because you're probably not going to want to create/remoge tabs straight away.
+
+        # Switch to translate tool because you're probably not going to want to create/remove tabs straight away.
         self._controller.setActiveTool("TranslateTool")
-        self._feedback_display.show_feedback(catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."), 5000)
+        Message(text=catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."), lifetime=15, title=self._default_message_title).show()
+        #self._feedback_display.show_feedback(catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."), 5000)
         #Message(
         #    text = catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."),
         #    title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn"),
@@ -648,7 +843,7 @@ class TabAnitWarpingReborn(Tool):
     def getTabSize(self) -> float:
         #log("d", f"getTabSize accessed with self._tab_size = {self._tab_size}")
         return self._tab_size
-  
+
     def setTabSize(self, TabSize: str) -> None:
         #log("d", f"setTabSize run with {TabSize}")
         try:
@@ -662,30 +857,30 @@ class TabAnitWarpingReborn(Tool):
 
         self._tab_size = float_value
         self._preferences.setValue("tabawreborn/tab_size", float_value)
- 
+
     def getLayerCount(self) -> int:
         #log("d", f"getLayerCount accessed with self._layer_count = {self._layer_count}")
         return self._layer_count
-  
+
     def setLayerCount(self, count: str) -> None:
         #log("d", f"setLayerCount run with {count}")
         try:
             int_value = int(count)
-            
+
         except ValueError:
             #log("e", "setLayerCount was passed something that could not be cast to a int")
             return
- 
+
         if int_value < 1:
             return
 
         self._layer_count = int_value
         self._preferences.setValue("tabawreborn/layer_count", int_value)
-        
+
     def getXYDistance(self) -> float:
         #log("d", f"getXYDistance accessed with self._xy_distance = {self._xy_distance}")
         return self._xy_distance
-  
+
     def setXYDistance(self, XYDistance: str) -> None:
         #log("d", f"setXYDistance run with {XYDistance}")
         try:
@@ -714,8 +909,25 @@ class TabAnitWarpingReborn(Tool):
         #log("d", f"setInputsValid run with {InputValid}")
         self._inputs_valid = InputValid
 
+    def getNotifications(self) -> str:
+        return self._notifications_string
+
+    def setNotifications(self, notifications: str) -> None:
+        """The front end should never change this. So it can't."""
+        log("d", "Something tried to call setNotifications")
+        return
+
+    def getHideToasts(self) -> bool:
+        #log("d", f"getHideToasts accessed with self._inputs_valid = {self._inputs_valid}")
+        return self._inputs_valid
+
+    def setHideToasts(self, HideToasts: bool) -> None:
+        #log("d", f"setHideToasts run with {InputValid}")
+        self._hide_toasts = HideToasts
+
     def getLogMessage(self) -> str:
         """ This is just here so I can use the setter to log stuff. """
+        log("d", "Something tried to call getLogMessage")
         return ""
 
     def setLogMessage(self, message: str) -> None:

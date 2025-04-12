@@ -31,6 +31,8 @@ For that you need to use Cura's built in move tool. Just hold Ctrl and click on 
 ## Want to say hi? Got an idea? Found a bug I haven't?
 **I want to hear it!** Just swing by the [the GitHub repo](https://github.com/Slashee-the-Cow/TabAntiWarpingReborn) and go to discussions, or issues.
 ## What are the latest updates?
+#### v1.0.1:
+- Minor bug fixes in UI.
 ### v1.0.0: Initial release
 #### What's new?
 - Automatically adding tabs now has two options: more tabs (which might overlap) or fewer tabs (which might miss some points). On a lot of models it won't make much difference either way. If you're not sure, go for more.
