@@ -29,11 +29,12 @@
 # - Added checks to make sure a tab isn't created off the build plate, or too close to edge, since Cura's aim sucks and tries to put tabs way off in the distance sometimes.
 #--------------------------------------------------------------------------------------------
 # v1.0.1
-# - Fixed a height setting in the FeedbackDisplay UI. I was in a rush, okay?
+# - Rolled my own notification UI as part of the tool control panel since UM.Messages hate both me and the support blocker tool.
 #--------------------------------------------------------------------------------------------
 # There seems to be a bug with UM.Message.Message that makes PickingPass go wildly off course if there's one on screen.
 # Hence why I rolled my own. It's much inferior, except that it doesn't seem to break things.
 
+from dataclasses import dataclass
 import math
 import os.path
 from typing import List
@@ -67,6 +68,12 @@ from UM.Tool import Tool
 
 from .FeedbackDisplay import FeedbackDisplay
 
+@dataclass
+class Notification:
+    """Holds info for a notification message since I can't use UM.Message"""
+    text: str  # If I need to explain this you're probably not qualified to work with this code.
+    lifetime: float  # Notification lifetime in seconds
+    id: int  # Becasue we've all gotten our notifications mixed up while out shopping... right?
 
 Resources.addSearchPath(
     os.path.join(os.path.abspath(os.path.dirname(__file__)))
@@ -94,36 +101,7 @@ def log(level: str, message: str) -> None:
     elif DEBUG_MODE:
         Logger.log("w", f"Invalid log level: {level} for message {message}")
 
-class MessageBlueprint:
-    """All the data I use for a Message stored so it can be recreated after
-    the message has been destroyed."""
-    def __init__(self, text: str, lifetime: int, title: str = "") -> None:
-        self._text = text
-        self._lifetime = lifetime
-        self._title = title
-
-    def to_message(self) -> Message:
-        """Creates a UM.Message based on blueprint data."""
-        return Message(text = self._text, lifetime = self._lifetime, title = self._title if self._title else None)
-
 class TabAnitWarpingReborn(Tool):
-
-    # Keys for the different kind of UM.Message-s we use.
-    # I'd use an Enum, but those are too much of a hassle to use the actual value of.
-    MESSAGE_TEST_CLICK = "message_test_click"
-    MESSAGE_INVALID_SETTINGS = "message_invalid_settings"
-    MESSAGE_LOCATION_OOB = "message_location_out_of_bounds"
-    MESSAGE_LOCATION_EDGE = "message_location_on_edge"
-    MESSAGE_SETTING_SUPPORT_PLACEMENT = "message_setting_support_placement"
-    MESSAGE_SETTING_SUPPORT_XY = "message_setting_support_xy_distance"
-    MESSAGE_SETTING_SUPPORT_INFILL = "message_setting_support_infill"
-    MESSAGE_SETTING_SUPPORT_REENABLED = "message_setting_support_reenabled"
-    MESSAGE_TABS_REMOVED = "message_remove_all_tabs"
-    MESSAGE_TABS_AUTOMATICALLY_CREATED = "message_tabs_automatically_created"
-    # Just to make an iterable to populate a dictionary.
-    MessageTypes = (MESSAGE_TEST_CLICK, MESSAGE_INVALID_SETTINGS, MESSAGE_LOCATION_OOB, MESSAGE_LOCATION_EDGE,
-                    MESSAGE_SETTING_SUPPORT_PLACEMENT, MESSAGE_SETTING_SUPPORT_XY,
-                    MESSAGE_SETTING_SUPPORT_REENABLED, MESSAGE_TABS_REMOVED, MESSAGE_TABS_AUTOMATICALLY_CREATED)
 
     def __init__(self) -> None:
         super().__init__()
@@ -137,6 +115,7 @@ class TabAnitWarpingReborn(Tool):
         self._as_dish: bool = False
         self._layer_count: int = 1
         self._inputs_valid: bool = False
+        self._hide_toasts: bool = True
 
         self._any_as_dish = False # Track if any dish supports have been created
 
@@ -148,7 +127,7 @@ class TabAnitWarpingReborn(Tool):
 
         self._feedback_display = FeedbackDisplay()
 
-        self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount", "InputsValid", "LogMessage")
+        self.setExposedProperties("TabSize", "XYDistance", "AsDish", "LayerCount", "InputsValid", "Notifications", "HideToasts", "LogMessage")
 
         CuraApplication.getInstance().globalContainerStackChanged.connect(self._updateEnabled)
 
@@ -178,24 +157,36 @@ class TabAnitWarpingReborn(Tool):
         self._as_dish = bool(self._preferences.getValue("tabawreborn/create_dish"))
         self._layer_count = int(self._preferences.getValue("tabawreborn/layer_count"))
 
-        # Create dictionary to hold Message blueprints
-        self._toast_blueprints: dict[str, MessageBlueprint | None] = {}
-        for message_type in self.MessageTypes:
-            self._toast_blueprints[message_type] = None
-
-        # Create dictionary to hold UM.Message toasts
-        self._toasts: dict[str, Message | None] = {}
-        for message_type in self.MessageTypes:
-            self._toasts[message_type] = None
-
-        # List of Message keys to show after being hidden for a PickingPass
-        self._hidden_toasts:list[str] = []
-
         # Hold variables needed for the deferred PickingPass
         self._last_picked_node: CuraSceneNode = None
         self._last_event: Event = None
 
+        self._are_messages_hidden: bool = False
+        self._hidden_messages: list[Message] = []
+
         self._default_message_title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")
+
+        self._notifications: list[Notification] = []
+        self._notification_next_id: int = 0
+        self._notifications_string: str = ""
+
+        #self._application.hideMessageSignal.connect(self._application_hide_message)
+        #self._application.showMessageSignal.connect(self._application_show_message)
+        #self._application.visibleMessageAdded.connect(self._application_visible_added)
+        #self._application.visibleMessageRemoved.connect(self._application_visible_hidden)
+        #self._test_timers: dict[int, QTimer] = {}  # To hold references to test timers
+
+    def _application_hide_message(self, message: Message):
+        log("d", f"message with text {message._text} and id{id(message)} just fired _application.hideMessageSignal")
+
+    def _application_show_message(self, message: Message):
+        log("d", f"message with text {message._text} and id{id(message)} just fired _application.showMessageSignal")
+
+    def _application_visible_added(self, message: Message):
+        log("d", f"message with text {message._text} and id{id(message)} just fired _application.visibleMessageAdded")
+
+    def _application_visible_hidden(self, message: Message):
+        log("d", f"message with text {message._text} and id{id(message)} just fired _application.visibleMessageHidden")
 
     def event(self, event) -> None:
         super().event(event)
@@ -209,20 +200,22 @@ class TabAnitWarpingReborn(Tool):
 
             #self._feedback_display.show_feedback("You clicked!")
             log("dd", "You clicked!")
-            try:
+            #try:
                 #log("dd", f"about to try and set self._toasts[self.MESSAGE_TEST_CLICK] which is currently {self._toasts[self.MESSAGE_TEST_CLICK]}")
                 #self._show_toast(self.MESSAGE_TEST_CLICK, text = "You clicked", lifetime = 10, title = "Grats!")
-                try:
-                    self._toast_blueprints[self.MESSAGE_TEST_CLICK] = MessageBlueprint("You clicked!", 10, self._default_message_title)
-                except Exception as e:
-                    log("e", f"Creating a MessageBlueprint raised {e}")
-                try:
-                    self._show_toast_blueprint(self.MESSAGE_TEST_CLICK)
-                except Exception as e:
-                    log("e", f"Showing a MessageBlueprint raised {e}")
-            except Exception as e:
-                log("e", f"event() got an exception trying to show message: {e}")
-            #Message(text="I'm a new instance!").show()
+                #try:
+                #    self._toast_blueprints[self.MESSAGE_TEST_CLICK] = MessageBlueprint("You clicked!", 10, self._default_message_title)
+                #except Exception as e:
+                #    log("e", f"Creating a MessageBlueprint raised {e}")
+                #try:
+                #    self._show_toast_blueprint(self.MESSAGE_TEST_CLICK)
+                #except Exception as e:
+                #    log("e", f"Showing a MessageBlueprint raised {e}")
+            #except Exception as e:
+                #log("e", f"event() got an exception trying to show message: {e}")
+            #you_clicked = Message(text="You clicked!", lifetime=10, title = self._default_message_title)
+            #you_clicked.show()
+
             log("dd", "event() just showed message, I hope")
 
             if self._skip_press:
@@ -242,8 +235,7 @@ class TabAnitWarpingReborn(Tool):
             log("d", f"picked_node = {picked_node}")
             if not self._inputs_valid:
                 log("d", "Tried to create tab with invalid inputs")
-                self._toast_blueprints[self.MESSAGE_INVALID_SETTINGS] = MessageBlueprint(catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."), 15, self._default_message_title)
-                self._show_toast_blueprint(self.MESSAGE_INVALID_SETTINGS)
+                self._notification_add(catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."), 10)
                 #self._feedback_display.show_feedback(catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."), 10000)
                 #self._show_toast(self.MESSAGE_INVALID_SETTINGS, text = catalog.i18nc("add_tab_invalid_input", "Cannot create a tab while some of the settings are not valid. Please check the tool's settings."),
                 #                 lifetime = 15, title=self._default_message_title)
@@ -254,13 +246,15 @@ class TabAnitWarpingReborn(Tool):
             log("d", "event() just got past valid input check")
             self._last_picked_node = picked_node
             self._last_event = event
+
             # Hide all currently shown messages
-            try:
-                self._hide_toasts()
-            except Exception as e:
-                log("e", f"_hide_toats raised {e}")
+            if self._hide_toasts:
+                try:  # In a try...except for now at least, just to make sure anything gets caught
+                    self._hide_messages()
+                except Exception as e:
+                    log("e", f"_hide_messages raised {e}")
             # Defer PickingPass until the next event loop
-            QTimer.singleShot(250, self._picking_pass)
+            QTimer.singleShot(250 if self._are_messages_hidden else 0, self._picking_pass)
             log("d", "event() set the timer")
             return
 
@@ -286,21 +280,21 @@ class TabAnitWarpingReborn(Tool):
                 self._removeSupportMesh(picked_node)
                 log("dd", f"_picking_pass just found that picked_node was support and removed it")
                 # Show previously hidden Messages
-                log("d", f"_picking_pass about to run _unhide_toasts while _hidden_toasts is {self._hidden_toasts}")
+                log("d", f"_picking_pass about to run _show_messages while _hidden_messages is {self._hidden_messages}")
                 try:
-                    self._unhide_toasts()
+                    self._show_messages()
                 except Exception as e:
-                    log("e", f"_unhide_toats raised {e}")
+                    log("e", f"_show_messages raised {e}")
                 return
             if node_stack.getProperty("anti_overhang_mesh", "value") or node_stack.getProperty("infill_mesh", "value") or node_stack.getProperty("support_mesh", "value"):
                 # Only "normal" meshes can have support_mesh added to them
                 log("dd", f"_picking_pass found that picked_node {picked_node} is the wrong kind of mesh")
                 # Show previously hidden Messages
-                log("d", f"_picking_pass about to run _unhide_toasts while _hidden_toasts is {self._hidden_toasts}")
+                log("d", f"_picking_pass about to run _show_messages while _hidden_messages is {self._hidden_messages}")
                 try:
-                    self._unhide_toasts()
+                    self._show_messages()
                 except Exception as e:
-                    log("e", f"_unhide_toats raised {e}")
+                    log("e", f"_show_messages raised {e}")
                 return
         #Message("You just added a tab!", title="Grats!").show()
 
@@ -317,87 +311,105 @@ class TabAnitWarpingReborn(Tool):
 
         log("dd", f"event.x = {event.x}, event.y = {event.y}")
         picked_position = picking_pass.getPickedPosition(event.x, event.y)
-
+        self._notification_add(repr(picked_position), 5)
 
         log("dd", f"repr(picked_position) = {repr(picked_position)}")
         if not self._check_valid_tab_placement(picked_position):
             log("dd", f"picked_position {picked_position} deemed invalid")
             # Show previously hidden Messages
-            log("d", f"_picking_pass about to run _unhide_toasts while _hidden_toasts is {self._hidden_toasts}")
+            log("d", f"_picking_pass about to run _show_messages while _hidden_toasts is {self._hidden_messages}")
             try:
-                self._unhide_toasts()
+                self._show_messages()
             except Exception as e:
-                log("e", f"_unhide_toats raised {e}")
+                log("e", f"_show_messages raised {e}")
             return
 
         # Add the tab at the picked location
         self._createSupportMesh(picked_node, picked_position)
 
         # Show previously hidden Messages
-        log("d", f"_picking_pass about to run _unhide_toasts while _hidden_toasts is {self._hidden_toasts}")
+        log("d", f"_picking_pass about to run _show_messages while _hidden_toasts is {self._hidden_messages}")
         try:
-            self._unhide_toasts()
+            self._show_messages()
         except Exception as e:
-            log("e", f"_unhide_toats raised {e}")
+            log("e", f"_show_messages raised {e}")
 
-    def _show_toast_blueprint(self, key: str) -> None:
-        log("d", f"_show_toast_blueprint: run with {key}")
-        if self._toast_blueprints.get(key):
-            log("d", f"_show_toast_blueprint: _toast_blueprints.get(key) exists and is {self._toast_blueprints[key]}")
-            if self._toasts.get(key) and self._toasts[key] and self._toasts[key].visible:
-                log("d", f"_show_toast_blueprint: _toasts.get(key) exists, is visible and is {self._toasts[key]}")
-                self._toasts[key].hide()
-                log("d", f"_show_toast_blueprint: _toasts[key] was hidden and is {self._toasts[key]}")
-                self._toasts[key] = None
-                log("d", f"_show_toast_blueprint: _toasts[key] was set to None and is {self._toasts[key]}")
+    def _hide_messages(self):
+        log("d", f"_hide_messages is running with an _application.getVisibleMessages() of {self._application.getVisibleMessages()}")
+        message_count = len(self._application.getVisibleMessages())
+        if message_count == 0:
+            self._are_messages_hidden = False
+            return
 
-            self._toasts[key] = self._toast_blueprints[key].to_message()
-            log("d", f"_show_toast_blueprint: _toasts[key] was just created based on blueprint and is {self._toasts[key]}")
-            self._toasts[key].show()
-            log("d", f"_show_toast_blueprint: _toasts[key] was was just shown and is {self._toasts[key]}")
+        self._are_messages_hidden = True
+        self._notification_add("<font color='red'>Do not move the camera until the click location is recorded.</font>", 1)
+        self._hidden_messages = list(self._application.getVisibleMessages())
+        log("d", f"_hide_messages just set _hidden_messages to {self._hidden_messages}")
+        for message in self._hidden_messages:
+            log("d", f"Before hideMessage, lifetime = {message._lifetime}")
+            message.hide()
+            log("d", f"After hideMessage, lifetime = {message._lifetime}")
 
-    #def _show_toast(self, key: str, **kwargs) -> None:
-    #    if key in self._toasts and self._toasts[key].visible:
-    #        self._toasts[key].hide()
+    def _show_messages(self):
+        if not self._are_messages_hidden:
+            return
 
-    #    self._toasts[key] = Message(**kwargs)
-    #    self._toasts[key].show()
+        self._notification_add("<font color='green'>Click position has been recorded.</font>", 3)
+        for message in self._hidden_messages:
+            log("d", f"Before showMessage, lifetime = {message._lifetime}")
+            message.show()
+            #message.hide()
+            """if message._lifetime > 0:
+                test_timer = QTimer()
+                test_timer.setInterval(5000)  # 5 seconds
+                test_timer.setSingleShot(True)
+                test_timer.timeout.connect(message.hide)
+                test_timer.start()
+                self._test_timers[id(message)] = test_timer  # Store a reference
+                log("w", f"DEBUG: Persistent test timer started for message: {message._text} (ID: {id(message)})")
 
-    def _hide_toasts(self):
-        log("d", f"_hide_toasts: run")
-        for key, message in self._toasts.items():
-            log("d", f"_hide_toasts: iterating through self._toasts.items(), current key {key} is {message}")
-            if message is not None and message.visible:
-                log("d", f"_hide_toasts: message is not None and is visible")
-                self._hidden_toasts.append(key)
-                log("d", f"_hide_toasts: just added key to _hidden_toasts which is {self._hidden_toasts}")
-                message.hide()
-                log("d", f"_hide_toasts: just hid message which is now {message}")
-                self._toasts[key] = None
-                log("d", f"_hide_toasts: just set _toasts[{key}] to {self._toasts[key]}")
-        log("d", f"_hide_toasts: finished, _hidden_toasts is {self._hidden_toasts}")
+            log("d", f"After showMessage, lifetime: {message._lifetime}, timer object: {message._lifetime_timer}")
+            if message._lifetime_timer:
+                log("d", f"Timer isSingleShot: {message._lifetime_timer.isSingleShot()}")
+                log("d", f"Timer interval: {message._lifetime_timer.interval()}")
+                log("d", f"Timer isActive: {message._lifetime_timer.isActive()}")
+            else:
+                log("w", "Lifetime timer is None after showMessage!")"""
 
-    def _unhide_toasts(self):
-        log("d", f"_unhide_toasts: run and _hidden_toasts is {self._hidden_toasts}")
-        # Remove duplicates from list
-        self._hidden_toasts = list(dict.fromkeys(self._hidden_toasts))
-        log("d", f"_unhide_toasts: just deleted duplicates from _hidden_toasts which is {self._hidden_toasts}")
-        for key in self._hidden_toasts:
-            log("d", f"_unhide_toasts: iterating through _hidden_toasts and current key is {key}")
-            if self._toast_blueprints.get(key):
-                log("d", f"_unhide_toasts: got found key {key} exists in _toast_blueprints and it is {self._toast_blueprints[key]}")
-                self._toasts[key] = self._toast_blueprints[key].to_message()
-                log("d", f"_unhide_toasts: just created toast which is {self._toasts[key]}")
-                self._toasts[key].show()
-                log("d", f"_unhide_toasts: just showed toast which is {self._toasts[key]}")
+        self._are_messages_hidden = False
+        self._hidden_messages = []
 
-        self._hidden_toasts.clear()
-        log("d", f"_unhide_toasts: just cleared _hidden_toasts which is now {self._hidden_toasts}")
+    def createTestMessage(self):
+        Message(text = "I'm a toast, not a test!", lifetime = 30, title = "A Test").show()
+
+    def testFeedbackDisplay(self):
+        self._feedback_display.show_feedback("I'm feedback!", 5000)
+
+    def testNotification(self):
+        self._notification_add("I die in 10 seconds!", 10)
+
+    def _notification_add(self, text: str, lifetime: float) -> None:
+        notification = Notification(text, lifetime, self._notification_next_id)
+        self._notifications.append(notification)
+        self._notification_next_id += 1
+        self._notifications_set_property()
+        QTimer.singleShot(int(lifetime * 1000), lambda: self._notification_remove(notification))
+
+    def _notification_remove(self, notification: Notification) -> None:
+        if notification in self._notifications:
+            self._notifications.remove(notification)
+            self._notifications_set_property()
+        else:
+            log("d", f"_notification_remove could not find notification with text {notification.text} and ID {notification.id}")
+
+    def _notifications_set_property(self) -> None:
+        self._notifications_string = "<br><br>".join(notification.text for notification in self._notifications)
+        self.propertyChanged.emit()
 
     def _createSupportMesh(self, parent: CuraSceneNode, position: Vector):
         node = CuraSceneNode()
 
-        node.setName("Tab")
+        node.setName("AdhesionTab")
 
         node.setSelectable(True)
 
@@ -460,7 +472,8 @@ class TabAnitWarpingReborn(Tool):
             #log("d", f"BEFORE: global stack support_type = {support_placement}")
             if support_placement == "buildplate":
                 message_string = catalog.i18nc("@info:support_placement_modified", "Support placement has been set to Everywhere to ensure dish tabs work correctly.")
-                self._feedback_display.show_feedback(message_string, 10000)
+                #self._feedback_display.show_feedback(message_string, 10000)
+                self._notification_add(message_string, 10)
                 #Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
                 global_stack.setProperty(support_type_key, "value", "everywhere")
                 #log("d", f"AFTER: global stack support_type = {global_stack.getProperty(support_type_key, 'value')}")
@@ -480,7 +493,8 @@ class TabAnitWarpingReborn(Tool):
         log("d", f"BEFORE: global stack {support_xy_key} = {stack_xy_distance}")
         if self._xy_distance != stack_xy_distance:
             message_string = f'{catalog.i18nc("@info:support_xy_modified", "Support X/Y distance has been changed to match tab tool settings of")} {str(self._xy_distance)}mm.'
-            self._feedback_display.show_feedback(message_string, 10000)
+            self._notification_add(message_string, 10)
+            #self._feedback_display.show_feedback(message_string, 10000)
             #Message(text = message_string, title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
             global_stack.setProperty(support_xy_key, "value", self._xy_distance)
             log("d", f"AFTER: global stack {support_xy_key} = {global_stack.getProperty(support_xy_key, 'value')}")
@@ -492,7 +506,8 @@ class TabAnitWarpingReborn(Tool):
             #log("d", f"BEFORE: global stack support_infill = {support_infill}")
             if support_infill < 100.0:
                 message_string = catalog.i18nc("@info:support_infill_modified", "Support density has been set to 100% to ensure tabs over 1 layer high are solid.")
-                self._feedback_display.show_feedback(message_string, 10000)
+                self._notification_add(message_string, 10)
+                #self._feedback_display.show_feedback(message_string, 10000)
                 #Message(text = message_string , title = catalog.i18nc("@info:setting_modification_title", "Tab Anti-Warping Reborn - Setting Modification")).show()
                 global_stack.setProperty(support_infill_key, "value", 100.0)
                 #log("d", f"AFTER: global stack support_infill = {extruder_stack.getProperty(support_infill_key, 'value')}")
@@ -520,7 +535,8 @@ class TabAnitWarpingReborn(Tool):
             or picked_position.z < -(machine_depth / 2)
             or picked_position.z > (machine_depth / 2)
         ):
-            self._feedback_display.show_feedback(catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."), 7500)
+            self._notification_add(catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."), 7.5)
+            #self._feedback_display.show_feedback(catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."), 7500)
             #Message(
             #    text = catalog.i18nc("tab_off_build_plate", "Oops! Looks like Cura picked an invalid position for the tab :( Please try again."),
             #    title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
@@ -537,7 +553,8 @@ class TabAnitWarpingReborn(Tool):
             or picked_position.z < front_edge
             or picked_position.z > rear_edge
         ):
-            self._feedback_display.show_feedback(catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."), 7500)
+            self._notification_add(catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."), 7.5)
+            #self._feedback_display.show_feedback(catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."), 7500)
             #Message(
             #    text = catalog.i18nc("tab_on_plate_edge", "A tab can't be that close to edge of the build plate. You should move your object in a bit."),
             #    title= catalog.i18nc("@message:title", "Tab Anti-Warping Reborn")).show()
@@ -577,7 +594,8 @@ class TabAnitWarpingReborn(Tool):
                         plugin_enabled = True #Enable plugin if support meshes exist.
                         if not global_container_stack.getProperty("support_mesh", "enabled"):
                             global_container_stack.setProperty("support_mesh", "enabled", True)
-                            self._feedback_display.show_feedback(catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), 5000)
+                            self._notification_add(catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), 5)
+                            #self._feedback_display.show_feedback(catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), 5000)
                             #Message(text = catalog.i18nc("@info:label", "Support was re-enabled because tabs are present in the scene."), title = catalog.i18nc("@info:title", "Tab Anti-Warping Reborn")).show() #Show toast message.
                         break
 
@@ -730,8 +748,9 @@ class TabAnitWarpingReborn(Tool):
             self._scene_tabs.clear()
             self._any_as_dish = False
             self.propertyChanged.emit()
-            self._feedback_display.show_feedback(catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."))
-            #Message(text = catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."), title=catalog.i18nc("remove_all_title", "Tab Anti-Warping Reborn"))
+            self._notification_add(catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."), 10)
+            #self._feedback_display.show_feedback(catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."))
+            #Message(text = catalog.i18nc("remove_all_text", "All tabs which the plugin has tracked have been deleted.\nSome may have lost tracking and need to be deleted manually."), title=catalog.i18nc("remove_all_title", "Tab Anti-Warping Reborn")).show()
 
     # Source code from MeshTools Plugin
     # Copyright (c) 2020 Aldo Hoeben / fieldOfView
@@ -812,9 +831,10 @@ class TabAnitWarpingReborn(Tool):
                     self._createSupportMesh(node, new_position)
                     last_tab_position = new_position
 
-        # Switch to translate tool because you're probably not going to want to create/remoge tabs straight away.
+        # Switch to translate tool because you're probably not going to want to create/remove tabs straight away.
         self._controller.setActiveTool("TranslateTool")
-        self._feedback_display.show_feedback(catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."), 5000)
+        Message(text=catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."), lifetime=15, title=self._default_message_title).show()
+        #self._feedback_display.show_feedback(catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."), 5000)
         #Message(
         #    text = catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."),
         #    title = catalog.i18nc("@message:title", "Tab Anti-Warping Reborn"),
@@ -889,8 +909,25 @@ class TabAnitWarpingReborn(Tool):
         #log("d", f"setInputsValid run with {InputValid}")
         self._inputs_valid = InputValid
 
+    def getNotifications(self) -> str:
+        return self._notifications_string
+
+    def setNotifications(self, notifications: str) -> None:
+        """The front end should never change this. So it can't."""
+        log("d", "Something tried to call setNotifications")
+        return
+
+    def getHideToasts(self) -> bool:
+        #log("d", f"getHideToasts accessed with self._inputs_valid = {self._inputs_valid}")
+        return self._inputs_valid
+
+    def setHideToasts(self, HideToasts: bool) -> None:
+        #log("d", f"setHideToasts run with {InputValid}")
+        self._hide_toasts = HideToasts
+
     def getLogMessage(self) -> str:
         """ This is just here so I can use the setter to log stuff. """
+        log("d", "Something tried to call getLogMessage")
         return ""
 
     def setLogMessage(self, message: str) -> None:

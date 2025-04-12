@@ -2,6 +2,7 @@ import os
 
 from cura.CuraApplication import CuraApplication
 from UM.Logger import Logger
+from datetime import datetime, time
 
 from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, QTimer
 from PyQt6.QtQuick import QQuickItem
@@ -114,7 +115,9 @@ class FeedbackDisplay(QObject):
 
     def show_feedback(self, message, timeout=15000) -> None:
         log("d", f"show_feedback run with message {message} and timeout {timeout}")
-        self.setMessage(message)
+        #self.setMessage(message)
+        # Test version including time
+        self.setMessage(f"{datetime.now().isoformat(timespec='milliseconds')}<br>{message}")
         log("d", f"show_feedback just ran self.setMessage() - self._message = {self._message}")
         self.setTimeout(timeout)
         log("d", f"show_feedback just ran setTimeout(). self._timeout = {self.timeout}")
