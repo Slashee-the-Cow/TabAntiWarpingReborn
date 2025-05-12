@@ -2,34 +2,37 @@
 # Based on the SupportBlocker plugin by Ultimaker B.V., and licensed under LGPLv3 or higher.
 # https://github.com/Ultimaker/Cura/tree/master/plugins/SupportEraser
 # Tab+ Anti Warping Copyright (c) 2022 5axes https://github.com/5axes/TabPlus
+#
 # Tab Anti-Warping Reborn by Slashee the Cow copyright 2025-
 #--------------------------------------------------------------------------------------------
 # Changelog (Reborn version)
 #
-# v1.0.0
-# - Renamed everything inside and out, so it won't interfere with other versions if installed side by side. Also so that it has the new name.
-# - Took out Qt 5 support resulting in requiring Cura 5.0 or higher. If this affects you, you probably should have upgraded quite a while ago.
-# - Removed "set on adhesion area" option. I honestly can't understand why it existed. If there's something I'm missing, by all means get in touch.
-# - Renamed "capsule" to "dish". Not my first choice but the inner construction brick afficionado won't let me call something that isn't flat "plate".
-# - Hopefully stopped the "remove all" button from removing things which aren't tabs. This might cause it to miss things which are tabs. I find this tradeoff acceptable.
-# - Cleaned up A LOT of code. When was the last time someone *cough* dusted this place?
-# - Refactor might be a bit of an understatement. I actually had to use AI to figure out what some of the code was or some of the variable names meant. Hopefully you don't.
-# - Redid the layout for the UI. Hopefully it doesn't look too different. Hopefully it's easier to maintain. That factor may be less important to you.
-# - Made the UI more responsive because there's lots of things neither of us have time for... I assume.
-# - Added copious amounts of input validation to the UI. Sorry if you were having fun trying to make tabs with invalid settings.
-# - Squashed a large quantity of bugs. My fingers are crossed that I missed the "fix one bug, add two more" paradigm.
-# - Implemented more checks to make sure Cura's settings are what they need to be for the plugin to work.
-# - Implemented UI explanations for why those settings need to be what they are for the plugin to work.
-# - Optimised some of the code. This may literally save you nanoseconds.
-# - Got rid of a whole bunch of docstrings that took up a lot of space but had very little to say in them. My linter is quite displeased with me.
-# - Tried to improve the linter's mood by type hinting a bunch of stuff. I don't think it's any more impressed.
-# - Put in a bunch of logging so when it inevitably fails hopefully I'll be able to figure out why.
-# - Had to put a Cura version check and add wrapper functions in the QML because in 5.7 they deprecated the way a tool accesses the backend in favour of a different way introduced in 5.7.
-# - Choice of density of auto generated tabs (minimum distance being radius or diameter) for those into Feng Shui and don't want clutter.
-# - Added checks to make sure a tab isn't created off the build plate, or too close to edge, since Cura's aim sucks and tries to put tabs way off in the distance sometimes.
-#--------------------------------------------------------------------------------------------
+# v1.1.0
+#   - Copied my patent-not-pending BaseDetect™ system over from Spoon Anti-Warping Reborn to place tabs around the object base, not the convex hull.
+#   - Fixed a couple of minor bugs which wouldn't have been there if I was paying attention in the first place.
 # v1.0.1
-# - Rolled my own notification UI as part of the tool control panel since UM.Messages hate both me and the support blocker tool.
+#   - Rolled my own notification UI as part of the tool control panel since UM.Messages hate both me and the support blocker tool.
+# v1.0.0
+#   - Renamed everything inside and out, so it won't interfere with other versions if installed side by side. Also so that it has the new name.
+#   - Took out Qt 5 support resulting in requiring Cura 5.0 or higher. If this affects you, you probably should have upgraded quite a while ago.
+#   - Removed "set on adhesion area" option. I honestly can't understand why it existed. If there's something I'm missing, by all means get in touch.
+#   - Renamed "capsule" to "dish". Not my first choice but the inner construction brick afficionado won't let me call something that isn't flat "plate".
+#   - Hopefully stopped the "remove all" button from removing things which aren't tabs. This might cause it to miss things which are tabs. I find this tradeoff acceptable.
+#   - Cleaned up A LOT of code. When was the last time someone *cough* dusted this place?
+#   - Refactor might be a bit of an understatement. I actually had to use AI to figure out what some of the code was or some of the variable names meant. Hopefully you don't.
+#   - Redid the layout for the UI. Hopefully it doesn't look too different. Hopefully it's easier to maintain. That factor may be less important to you.
+#   - Made the UI more responsive because there's lots of things neither of us have time for... I assume.
+#   - Added copious amounts of input validation to the UI. Sorry if you were having fun trying to make tabs with invalid settings.
+#   - Squashed a large quantity of bugs. My fingers are crossed that I missed the "fix one bug, add two more" paradigm.
+#   - Implemented more checks to make sure Cura's settings are what they need to be for the plugin to work.
+#   - Implemented UI explanations for why those settings need to be what they are for the plugin to work.
+#   - Optimised some of the code. This may literally save you nanoseconds.
+#   - Got rid of a whole bunch of docstrings that took up a lot of space but had very little to say in them. My linter is quite displeased with me.
+#   - Tried to improve the linter's mood by type hinting a bunch of stuff. I don't think it's any more impressed.
+#   - Put in a bunch of logging so when it inevitably fails hopefully I'll be able to figure out why.
+#   - Had to put a Cura version check and add wrapper functions in the QML because in 5.7 they deprecated the way a tool accesses the backend in favour of a different way introduced in 5.7.
+#   - Choice of density of auto generated tabs (minimum distance being radius or diameter) for those into Feng Shui and don't want clutter.
+#   - Added checks to make sure a tab isn't created off the build plate, or too close to edge, since Cura's aim sucks and tries to put tabs way off in the distance sometimes.
 #--------------------------------------------------------------------------------------------
 # There seems to be a bug with UM.Message.Message that makes PickingPass go wildly off course if there's one on screen.
 # Hence why I rolled my own. It's much inferior, except that it doesn't seem to break things.
@@ -39,7 +42,9 @@ import math
 import os.path
 from typing import List
 
-import numpy
+import numpy as np
+from scipy.spatial import ConvexHull
+import trimesh
 from cura.CuraApplication import CuraApplication
 from cura.Operations.SetParentOperation import SetParentOperation
 from cura.PickingPass import PickingPass
@@ -52,8 +57,10 @@ from PyQt6.QtWidgets import QApplication
 from UM.Event import Event, MouseEvent
 from UM.i18n import i18nCatalog
 from UM.Logger import Logger
+from UM.Math.Polygon import Polygon
 from UM.Math.Vector import Vector
 from UM.Mesh.MeshBuilder import MeshBuilder
+from UM.Mesh.MeshData import MeshData
 from UM.Message import Message
 from UM.Operations.AddSceneNodeOperation import AddSceneNodeOperation
 from UM.Operations.GroupedOperation import GroupedOperation
@@ -461,7 +468,7 @@ class TabAnitWarpingReborn(Tool):
         left_edge: float = -(machine_width / 2) + (self._tab_size / 2)
         right_edge: float = (machine_width / 2) - (self._tab_size / 2)
         front_edge: float = (-machine_depth / 2) + (self._tab_size / 2)
-        rear_edge: float = (machine_depth / 2) + (self._tab_size / 2)
+        rear_edge: float = (machine_depth / 2) - (self._tab_size / 2)
         log("d", f"left_edge = {left_edge}, right_edge = {right_edge}, front_edge = {front_edge}, rear_edge = {rear_edge}")
         if(
             picked_position.x < left_edge
@@ -593,14 +600,14 @@ class TabAnitWarpingReborn(Tool):
             vertices.append([base_radius*math.cos(i*segment_radians), min_y, base_radius*math.sin(i*segment_radians)])
             vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])
 
-        mesh.setVertices(numpy.asarray(vertices, dtype=numpy.float32))
+        mesh.setVertices(np.asarray(vertices, dtype=np.float32))
 
         indices = []
         # for every angle increment 24 Vertices
         total = segment_angle * 24
         for i in range(0, total, 3):
             indices.append([i, i+1, i+2])
-        mesh.setIndices(numpy.asarray(indices, dtype=numpy.int32))
+        mesh.setIndices(np.asarray(indices, dtype=np.int32))
 
         mesh.calculateNormals()
         return mesh
@@ -635,14 +642,14 @@ class TabAnitWarpingReborn(Tool):
             vertices.append([base_radius*math.cos(i*segment_radians), min_y, base_radius*math.sin(i*segment_radians)])
             vertices.append([base_radius*math.cos((i+1)*segment_radians), min_y, base_radius*math.sin((i+1)*segment_radians)])
 
-        mesh.setVertices(numpy.asarray(vertices, dtype=numpy.float32))
+        mesh.setVertices(np.asarray(vertices, dtype=np.float32))
 
         indices = []
         # for every angle increment 12 Vertices
         total = segment_angle * 12
         for i in range(0, total, 3):
             indices.append([i, i+1, i+2])
-        mesh.setIndices(numpy.asarray(indices, dtype=numpy.int32))
+        mesh.setIndices(np.asarray(indices, dtype=np.int32))
 
         mesh.calculateNormals()
         return mesh
@@ -677,9 +684,25 @@ class TabAnitWarpingReborn(Tool):
 
         return []
 
+    # Used to compare union convex hulls to allow for floating point inaccuracies
+    def _compare_polygons_with_tolerance(self, poly1: Polygon, poly2: Polygon, tolerance=1e-6):
+        points1 = poly1.getPoints()
+        points2 = poly2.getPoints()
+
+        if points1 is None and points2 is None:
+            return True
+        if points1 is None or points2 is None or len(points1) != len(points2):
+            return False
+
+        # Sort the points before comparison to handle different vertex order
+        sorted_points1 = np.sort(points1, axis=0)
+        sorted_points2 = np.sort(points2, axis=0)
+
+        return np.allclose(sorted_points1, sorted_points2, atol=tolerance, rtol=tolerance)
+
     # Automatic creation
-    def addAutoSupportMesh(self, data:QJSValue) -> None:
-        log("d", f"addAutoSupportMesh got data {repr(data)}")
+    def addAutoTabMesh(self, data:QJSValue) -> None:
+        log("d", f"addAutoTabMesh got data {repr(data)}")
         dense = True
         # Make sure data is the right type before we mess with it:
         if data is not None and isinstance(data, QJSValue):
@@ -688,11 +711,11 @@ class TabAnitWarpingReborn(Tool):
             # Hope our QVariant is a dict like we passed
             if isinstance(variant, dict):
                 dense = variant.get("dense", True)
-                log("d", f"addAutoSupportMesh from QVariant {variant} got dense {dense}")
+                log("d", f"addAutoTabMesh from QVariant {variant} got dense {dense}")
             else:
-                log("d", f"addAutoSupportMesh got QVariant {variant} which isn't a dict")
+                log("d", f"addAutoTabMesh got QVariant {variant} which isn't a dict")
         else:
-            log("d", f"addAutoSupportMesh did not get a QJSValue passed to it. It got {data}")
+            log("d", f"addAutoTabMesh did not get a QJSValue passed to it. It got {data}")
 
         nodes_list = self._getAllSelectedNodes()
         if not nodes_list:
@@ -714,33 +737,135 @@ class TabAnitWarpingReborn(Tool):
                 continue
             log("d", f"{node.getName()} is a valid mesh")
 
-            hull_polygon = node.callDecoration("_compute2DConvexHull")
+            shapes: list[np.ndarray] = None
+            try:
+                shapes = self._get_base_convex_hulls(node)
+            except Exception as e:
+                log("e", f"Exception in _get_base_convex_hulls: {e}")
+            if shapes is not None:
+                for shape in shapes:
+                    log("d", f"addAutoTabMesh: just got base convex hulls {shape}")
 
-            # Make sure it's a valid polygon
-            if len(hull_polygon.getPoints()) < 3:
-                log("w", f"{node.getName()} didn't produce a valid convex hull")
-                continue
+                # Filter out any hulls completely inside one another
+                if len(shapes) > 1:
+                    filtered_hulls = []
+                    log("d", "Filtering hulls")
+                    true_element = True
+                    false_element = False
+                    is_base = [true_element for _ in range(len(shapes))]
+                    is_child = [false_element for _ in range(len(shapes))]
+                    for a, hull_a in enumerate(shapes):
+                        for b, hull_b in enumerate(shapes):
+                            if a == b:
+                                continue
+                            if is_child[a] or is_child[b]:
+                                continue
+                            try:
+                                union_hull = hull_a.unionConvexHulls(hull_b)
+                            except Exception as e:
+                                log("e", f"Couldn't create union hull for overlap test: {e}")
+                            log("d", f"union_hull = {union_hull}")
+                            if self._compare_polygons_with_tolerance(union_hull, hull_a):
+                                # b is fully contained within a
+                                is_base[b] = False
+                                is_child[b] = True
+                            if self._compare_polygons_with_tolerance(union_hull, hull_b):
+                                # a is fully contained within b
+                                is_base[a] = False
+                                is_child[a] = True
+                                break
+                    log("d", f"Looped through hulls, is_base = {is_base}, is_child = {is_child}")
+                    for i, hull in enumerate(shapes):
+                        if is_base[i]:
+                            filtered_hulls.append(hull)
+                    shapes = filtered_hulls
 
-            points=hull_polygon.getPoints()
-            minimum_distance = self._tab_size * 0.5 if dense else self._tab_size
+            # If the complicated way doesn't work fall back to the regular way
+            if shapes is None or len(shapes) == 0:
+                log("i", "addAutoTabMesh: falling back to regular hull")
+                hull_polygon: Polygon = node.callDecoration("getConvexHullBoundary")
+                if hull_polygon is None:
+                    hull_polygon = node.callDecoration("getConvexHull")
 
-            last_tab_position = None
-            first_point = Vector(points[0][0], 0, points[0][1])
+                if not hull_polygon or not hull_polygon.isValid():
+                    log("w", f"Object {node.getName()} cannot be calculated because it has no convex hull.")
+                    continue
+                shapes = [hull_polygon]
 
-            for i, point in enumerate(points):
-                new_position = Vector(point[0], 0, point[1])
-                difference_vector = last_tab_position - new_position if last_tab_position else Vector(0,0,0)
-                # Guarantee distance will always be large enough even if previous position not set
-                difference_length = difference_vector.length() if last_tab_position else self._tab_size * 2
+            minimum_gap = self._tab_size * 0.5 if dense else self._tab_size
 
-                first_to_last_length = (first_point - new_position).length() if i == len(points) - 1 else 0
-                if difference_length >= minimum_distance or first_to_last_length >= minimum_distance:
-                    self._createSupportMesh(node, new_position)
-                    last_tab_position = new_position
+            for shape in shapes:
+                shape_points = shape.getPoints()
+                if shape_points is None:
+                    continue
+                    
+                log("d", "addAutoTabMesh: in loop for each shape")
+                last_tab_position = None
+                first_point = Vector(shape_points[0][0], 0, shape_points[0][1])
+
+                for i, point in enumerate(shape_points):
+                    new_position = Vector(point[0], 0, point[1])
+                    difference_vector = last_tab_position - new_position if last_tab_position else Vector(0,0,0)
+                    # Guarantee distance will always be large enough even if previous position not set
+                    difference_length = difference_vector.length() if last_tab_position else minimum_gap * 2
+
+                    first_to_last_distance = (first_point - new_position).length() if i == len(shape_points) - 1 else 0
+                    if (first_to_last_distance == 0 and difference_length >= minimum_gap) or (first_to_last_distance >= minimum_gap and difference_length >= minimum_gap):
+                        self._createSupportMesh(node, new_position)
+                        last_tab_position = new_position
 
         # Switch to translate tool because you're probably not going to want to create/remove tabs straight away.
         self._controller.setActiveTool("TranslateTool")
         Message(text=catalog.i18nc("auto_tab_switch_tool","Automatic tab creation finished. Switching to move tool."), lifetime=15, title=self._default_message_title).show()
+
+    def _get_base_convex_hulls(self, node: CuraSceneNode, height: float = 0.2) -> list[np.ndarray]:
+        if not node:
+            return None
+        trimesh_mesh = self._toTriMesh(node.getMeshDataTransformed())
+        log("d", f"_get_base_convex_hulls using trimesh = {trimesh_mesh}")
+        log("d", f"_get_base_convex_hulls trimesh is watertight? {trimesh_mesh.is_watertight}")
+        min_y = trimesh_mesh.bounds[0][1]
+        slice_y = min_y + height
+
+        plane_origin = np.array([0, slice_y, 0])
+        plane_normal = np.array([0, 1, 0])
+
+        section = trimesh_mesh.section(plane_normal=plane_normal, plane_origin=plane_origin)
+        if section is not None:
+            if hasattr(section, 'discrete'):  # It's a Path3D (series of contours)
+                uranium_polygons = []
+                for contour in section.discrete:
+                    vertices_2d = np.array([[point[0], point[2]] for point in contour])
+                    if vertices_2d.shape[0] >= 3:
+                        hull = ConvexHull(vertices_2d)
+                        hull_points = vertices_2d[hull.vertices]
+                        uranium_polygon = Polygon(hull_points)
+                        uranium_polygons.append(uranium_polygon)
+                return uranium_polygons
+            if hasattr(section, 'vertices'): # It's a Trimesh (intersection is a face)
+                vertices_2d = section.vertices[:, [0,2]]
+                if vertices_2d.shape[0] >= 3:
+                    hull = ConvexHull(vertices_2d)
+                    hull_points = vertices_2d[hull.vertices]
+                    return [Polygon(hull_points)]
+                return []
+            return []
+        return []
+
+
+    #----------------------------------------
+    # Initial Source code from  fieldOfView
+    #----------------------------------------
+    def _toTriMesh(self, mesh_data: MeshData) -> trimesh.base.Trimesh:
+        if not mesh_data:
+            return trimesh.base.Trimesh()
+
+        indices = mesh_data.getIndices()
+        if indices is None:
+            # some file formats (eg 3mf) don't supply indices, but have unique vertices per face
+            indices = np.arange(mesh_data.getVertexCount()).reshape(-1, 3)
+
+        return trimesh.base.Trimesh(vertices=mesh_data.getVertices(), faces=indices)
 
     def getTabSize(self) -> float:
         #log("d", f"getTabSize accessed with self._tab_size = {self._tab_size}")
