@@ -298,14 +298,14 @@ Item {
                         text: catalog.i18nc("density_menu", "More tabs (may overlap)")
                         onClicked: {
                             validateInputs()
-                            triggerActionWithData("addAutoSupportMesh", {dense: true})
+                            triggerActionWithData("addAutoTabMesh", {dense: true})
                         }
                     }
                     MenuItem{
                         text: catalog.i18nc("density_menu", "Less tabs (may miss points)")
                         onClicked: {
                             validateInputs()
-                            triggerActionWithData("addAutoSupportMesh", {dense: false})
+                            triggerActionWithData("addAutoTabMesh", {dense: false})
                         }
                     }
                 }

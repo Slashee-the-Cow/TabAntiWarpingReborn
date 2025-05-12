@@ -31,6 +31,9 @@ For that you need to use Cura's built in move tool. Just hold Ctrl and click on 
 ## Want to say hi? Got an idea? Found a bug I haven't?
 **I want to hear it!** Just swing by the [the GitHub repo](https://github.com/Slashee-the-Cow/TabAntiWarpingReborn) and go to discussions, or issues.
 ## What are the latest updates?
+#### v1.1.0:
+- Automatic tab placement will now properly place tabs around the base of an object if it has areas which don't touch the build plate or multiple areas that do.
+- Fixed a couple of minor bugs which could result in tabs being placed in the wrong positions.
 #### v1.0.1:
 - Made my own notifications (in tool panel) because a bug in Cura can cause invalid placement using normal messages.
 ### v1.0.0: Initial release
@@ -73,3 +76,4 @@ I prevented the more extreme circumstances but it can still get it wrong sometim
 As far as I can tell this is an issue with Cura (though I'd really love it if someone showed me it isn't :D) and not something I can fix on my end.
 I have implemented a workaround which *should* help, but I can't give you an iron-clad guarantee on that.
 - It's possible to change print quality settings from the optimal defaults set when creating a tab. Please don't.
+- The advanced tab placement requires libraries which are not available in Cura 5.0 and will fall back to the old logic.
